@@ -1,0 +1,72 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { prepareSwing, compareSwing } from '../src/core/compare.js';
+import { evaluateFeedback, summarize } from '../src/core/feedback.js';
+import { detectPitcherSide, suggestStanceFrame } from '../src/core/sequence.js';
+import { PHASE_KEYS } from '../src/core/phases.js';
+import { archetype, demoUserSwing } from './helpers.mjs';
+
+function proPrep(id) {
+  const { entry, frames } = archetype(id);
+  return prepareSwing({ frames, fps: entry.fps, stanceIndex: entry.stanceFrame, pitcherSide: entry.orientation.pitcherSide, phases: entry.phases });
+}
+
+function demoPrep() {
+  const d = demoUserSwing();
+  const stance = suggestStanceFrame(d.frames, d.fps);
+  const side = detectPitcherSide(d.frames, stance, d.fps).side;
+  return { d, user: prepareSwing({ frames: d.frames, fps: d.fps, stanceIndex: stance, pitcherSide: side }) };
+}
+
+test('a swing compared with itself scores 100 with identical phases and no issues', () => {
+  const p = proPrep('synthetic-a');
+  const c = compareSwing(p, p);
+  assert.ok(c.swingScore > 99.9);
+  assert.deepEqual(c.phases, p.phases);
+  const items = evaluateFeedback({ ...p, phases: c.phases }, p, { proName: 'A' });
+  assert.ok(items.length >= 25);
+  assert.ok(items.every((i) => i.severity === 'good'), items.filter((i) => i.severity !== 'good').map((i) => i.id).join());
+});
+
+test('heuristic phase detection matches the labelled pro phases', () => {
+  for (const id of ['synthetic-a', 'synthetic-b', 'synthetic-c']) {
+    const { entry } = archetype(id);
+    const p = proPrep(id);
+    for (const k of ['load', 'footPlant', 'contact']) {
+      assert.ok(Math.abs(p.detectedPhases[k] - entry.phases[k]) <= 3, `${id} ${k}: ${p.detectedPhases[k]} vs ${entry.phases[k]}`);
+    }
+  }
+});
+
+test('demo swing: phases are transferred accurately through the alignment', () => {
+  const { d, user } = demoPrep();
+  const c = compareSwing(user, proPrep('synthetic-a'));
+  for (const k of PHASE_KEYS.filter((k) => k !== 'stance')) {
+    assert.ok(Math.abs(c.phases[k] - d.phases[k]) <= 2, `${k}: ${c.phases[k]} vs true ${d.phases[k]}`);
+  }
+  assert.ok(c.swingScore > 50 && c.swingScore < 95, `score ${c.swingScore}`);
+});
+
+test('demo swing: feedback finds the flaws that were built into it', () => {
+  const { user } = demoPrep();
+  const pro = proPrep('synthetic-a');
+  const c = compareSwing(user, pro);
+  const items = evaluateFeedback({ ...user, phases: c.phases }, pro, { proName: 'Pro' });
+  const byId = Object.fromEntries(items.map((i) => [i.id, i]));
+  const flagged = (id, dir) => {
+    const it = byId[id];
+    assert.ok(it, `${id} missing`);
+    assert.notEqual(it.severity, 'good', `${id} should be flagged (${it.user} vs ${it.pro})`);
+    if (dir) assert.equal(Math.sign(it.delta), dir, `${id} direction`);
+  };
+  flagged('plant.stride', +1); // longer stride
+  flagged('contact.head', +1); // head drifts toward the pitcher
+  flagged('contact.tilt', +1); // not staying behind the ball
+  flagged('contact.shoulders', +1); // shoulders open early
+  flagged('timing.swing', +1); // slower from plant to contact
+  flagged('load.legLift', -1); // smaller leg lift
+  assert.equal(byId['contact.sequence'].severity, 'major');
+  const s = summarize(items);
+  assert.equal(s.priorities.length, 3);
+  assert.ok(s.strengths.length > 5);
+});

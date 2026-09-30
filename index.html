@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Swing Match</title>
+  <meta name="description" content="Compare your baseball swing to MLB swings: in-browser pose estimation, OpenPose BODY_25 stance matching and phase-by-phase feedback.">
+  <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./">
+      <img src="assets/icon.svg" alt="" width="28" height="28">
+      <span>Swing Match</span>
+    </a>
+    <nav>
+      <a href="./" aria-current="page">Analyze</a>
+      <a href="builder.html">Database builder</a>
+      <a href="#how">How it works</a>
+    </nav>
+  </header>
+
+  <main id="app">
+    <section class="hero">
+      <h1>Find your MLB swing twin</h1>
+      <p>Upload a side-view video of your swing. We find your body position in every frame (right in your browser, nothing is uploaded), match your stance against a database of pro stances stored as OpenPose keypoints, then line up the rest of your swing with your closest match and tell you where you differ.</p>
+      <p class="db-status" id="db-status">Loading pro database&hellip;</p>
+    </section>
+
+    <!-- Step 1: upload -->
+    <section class="card step" id="step-upload" aria-labelledby="h-upload">
+      <div class="step-head"><span class="step-num">1</span><h2 id="h-upload">Upload your swing</h2></div>
+      <div class="upload-grid">
+        <div>
+          <label class="dropzone" id="dropzone">
+            <input type="file" id="file-input" accept="video/*">
+            <svg viewBox="0 0 24 24" width="36" height="36" aria-hidden="true"><path fill="currentColor" d="M4 5h11a2 2 0 0 1 2 2v2.5l3.3-2.2A1 1 0 0 1 22 8.1v7.8a1 1 0 0 1-1.7.8L17 14.5V17a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"/></svg>
+            <strong>Drop a video here or click to choose</strong>
+            <span>MP4, MOV or WebM. Only the part you select is analyzed.</span>
+          </label>
+          <button class="btn ghost" id="demo-btn" type="button">No video handy? Try the demo swing</button>
+        </div>
+        <div class="tips">
+          <h3>Filming tips</h3>
+          <ul>
+            <li><strong>Side view:</strong> camera at 90&deg; to the pitch path, facing your chest (or your back). The pitcher should be off to the left or right of the frame.</li>
+            <li><strong>Whole body in frame</strong> from head to feet for the entire swing, camera still (tripod or fence).</li>
+            <li><strong>Frame rate:</strong> 60 fps or slow motion if your phone can. You can tell us the slow-motion factor in the next step so timing is right.</li>
+            <li>Good light, one person in frame, 2&ndash;8 seconds around a single swing.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- Step 1b: clip selection -->
+    <section class="card step" id="step-clip" hidden aria-labelledby="h-clip">
+      <div class="step-head"><span class="step-num">1</span><h2 id="h-clip">Choose the part with your swing</h2></div>
+      <div class="clip-grid">
+        <div class="stage-wrap" id="clip-stage"></div>
+        <div class="clip-side">
+          <p id="clip-info" class="muted"></p>
+          <label>Start (seconds) <input type="number" id="clip-start" step="0.1" min="0" value="0"></label>
+          <label>End (seconds) <input type="number" id="clip-end" step="0.1" min="0" value="0"></label>
+          <p class="muted small">Tip: include about a second before your load starts and a second after your finish.</p>
+          <details class="settings" open>
+            <summary>Analysis settings</summary>
+            <div class="settings-grid">
+              <label>Pose model
+                <select id="set-quality">
+                  <option value="lite">Fast (lite)</option>
+                  <option value="full" selected>Balanced (full)</option>
+                  <option value="heavy">Most accurate (heavy, slow)</option>
+                </select>
+              </label>
+              <label>Frames to analyze per second
+                <select id="set-fps">
+                  <option value="auto" selected>Auto (match video, max 60)</option>
+                  <option value="15">15</option>
+                  <option value="30">30</option>
+                  <option value="60">60</option>
+                </select>
+              </label>
+              <label>Video speed
+                <select id="set-speed">
+                  <option value="1" selected>Real time</option>
+                  <option value="2">2&times; slow motion</option>
+                  <option value="4">4&times; slow motion (120 fps)</option>
+                  <option value="8">8&times; slow motion (240 fps)</option>
+                </select>
+              </label>
+            </div>
+          </details>
+          <div class="btn-row">
+            <button class="btn primary" id="analyze-btn" type="button">Analyze swing</button>
+            <button class="btn ghost" id="clip-cancel" type="button">Choose another video</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Step 2: progress -->
+    <section class="card step" id="step-progress" hidden aria-labelledby="h-progress">
+      <div class="step-head"><span class="step-num">2</span><h2 id="h-progress">Finding your body position</h2></div>
+      <div class="progress-grid">
+        <canvas id="progress-canvas" class="progress-canvas" width="320" height="320"></canvas>
+        <div>
+          <p id="progress-status">Loading pose model&hellip;</p>
+          <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progress-bar"><span></span></div>
+          <p class="muted small" id="progress-detail"></p>
+          <button class="btn ghost" id="cancel-btn" type="button">Cancel</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Step 3: stance -->
+    <section class="card step" id="step-stance" hidden aria-labelledby="h-stance">
+      <div class="step-head"><span class="step-num">3</span><h2 id="h-stance">Pick the frame with your starting stance</h2></div>
+      <div class="stance-grid">
+        <div>
+          <div class="stage-wrap" id="stance-stage"></div>
+          <div class="scrubber">
+            <button class="btn icon" id="stance-prev" type="button" aria-label="Previous frame">&#9664;</button>
+            <input type="range" id="stance-slider" min="0" max="0" value="0" aria-label="Frame">
+            <button class="btn icon" id="stance-next" type="button" aria-label="Next frame">&#9654;</button>
+          </div>
+          <p class="muted small center" id="stance-frame-label"></p>
+        </div>
+        <div class="stance-side">
+          <p>Scrub to the moment you are set in your stance, <strong>just before</strong> your load or leg kick starts.</p>
+          <button class="btn ghost" id="stance-suggest" type="button">Jump to suggested stance</button>
+          <fieldset class="segmented" id="pitcher-side">
+            <legend>The pitcher is to the</legend>
+            <label><input type="radio" name="pside" value="left"> <span>&larr; Left</span></label>
+            <label><input type="radio" name="pside" value="right"> <span>Right &rarr;</span></label>
+          </fieldset>
+          <p class="muted small" id="pitcher-hint"></p>
+          <p class="notice" id="coverage-note" hidden></p>
+          <button class="btn primary" id="compare-btn" type="button">Compare my swing</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Step 4: results -->
+    <section id="results" hidden>
+      <section class="card" aria-labelledby="h-match">
+        <div class="step-head"><span class="step-num">4</span><h2 id="h-match">Your stance match</h2></div>
+        <div class="match-grid">
+          <div>
+            <p class="muted small">Pros ranked by how closely their stance matches yours. Pick one to compare the rest of your swing against.</p>
+            <ol class="pro-list" id="pro-list"></ol>
+            <button class="btn ghost" id="restance-btn" type="button" style="margin-top:10px">Change stance frame or pitcher side</button>
+          </div>
+          <div>
+            <canvas id="stance-canvas" class="scene-canvas" aria-label="Your stance overlaid on the selected pro's stance"></canvas>
+            <div class="legend center"><span class="legend-item"><span class="line-key" style="background:var(--series-user)"></span>You</span><span class="legend-item"><span class="line-key" style="background:var(--series-pro)"></span><span id="stance-pro-name">Pro</span></span></div>
+          </div>
+        </div>
+        <h3 class="sub-h">Stance details</h3>
+        <div id="stance-feedback" class="feedback-list"></div>
+      </section>
+
+      <section class="card" aria-labelledby="h-swing">
+        <h2 id="h-swing">Swing comparison</h2>
+        <div class="scores" id="scores"></div>
+        <div class="player-grid">
+          <figure>
+            <div class="stage-wrap" id="result-stage"></div>
+            <figcaption class="muted small">Your video with your detected skeleton<span id="ghost-caption">, plus the pro&rsquo;s movement scaled to your body (orange)</span>.</figcaption>
+          </figure>
+          <figure>
+            <canvas id="scene-canvas" class="scene-canvas" aria-label="Your swing overlaid on the pro's swing"></canvas>
+            <figcaption class="muted small">Side-by-side overlay, lined up at your stance and scaled to the same torso length. Lines trace the hands.</figcaption>
+          </figure>
+        </div>
+        <div class="player-controls">
+          <button class="btn icon" id="play-btn" type="button" aria-label="Play">&#9654;</button>
+          <select id="play-rate" aria-label="Playback speed">
+            <option value="0.25">0.25&times;</option>
+            <option value="0.5" selected>0.5&times;</option>
+            <option value="1">1&times;</option>
+          </select>
+          <div class="timeline">
+            <input type="range" id="timeline" min="0" max="0" value="0" aria-label="Swing timeline">
+            <div class="phase-marks" id="phase-marks"></div>
+          </div>
+          <label class="check"><input type="checkbox" id="ghost-toggle" checked> Pro ghost on video</label>
+        </div>
+        <div class="phase-chips" id="phase-chips"></div>
+      </section>
+
+      <section class="card" aria-labelledby="h-feedback">
+        <div class="card-head">
+          <h2 id="h-feedback">Feedback</h2>
+          <label class="height-input">Your height (for inches)
+            <span class="inline-inputs">
+              <input type="number" id="set-ft" min="3" max="7" value="5" aria-label="feet"> ft
+              <input type="number" id="set-in" min="0" max="11" value="10" aria-label="inches"> in
+            </span>
+          </label>
+        </div>
+        <div id="priorities" class="priorities"></div>
+        <div id="strengths" class="strengths"></div>
+        <div id="phase-feedback"></div>
+        <p class="muted small" id="timing-note"></p>
+      </section>
+
+      <section class="card" aria-labelledby="h-charts">
+        <h2 id="h-charts">Through the swing</h2>
+        <p class="muted small">Values over the aligned swing, in seconds from contact. Hover or focus a chart for exact values.</p>
+        <div class="charts-grid" id="charts"></div>
+        <details class="data-table">
+          <summary>View the numbers as a table</summary>
+          <div id="data-table"></div>
+        </details>
+      </section>
+
+      <section class="card" aria-labelledby="h-export">
+        <h2 id="h-export">Save your results</h2>
+        <div class="btn-row">
+          <button class="btn" id="export-pose" type="button">Download my pose data (OpenPose BODY_25 JSON)</button>
+          <button class="btn" id="export-report" type="button">Download report (JSON)</button>
+          <button class="btn ghost" id="restart-btn" type="button">Analyze another swing</button>
+        </div>
+      </section>
+    </section>
+
+    <section class="card how" id="how" aria-labelledby="h-how">
+      <h2 id="h-how">How it works</h2>
+      <ol>
+        <li><strong>Pose estimation.</strong> MediaPipe Pose Landmarker runs in your browser on each frame. Its 33 landmarks are converted to the 25-keypoint <a href="https://cmu-perceptual-computing-lab.github.io/openpose/web/html/doc/md_doc_02_output.html">OpenPose BODY_25</a> format, the same format as the pro database.</li>
+        <li><strong>Normalization.</strong> The swing is flipped so the pitcher is always to the right, joints are relabeled as front and back side (so left- and right-handed hitters compare directly), left/right label mix-ups are repaired, and everything is scaled to your torso length.</li>
+        <li><strong>Stance match.</strong> Your stance frame is compared joint by joint with every pro stance. The closest one is your match.</li>
+        <li><strong>Swing alignment.</strong> Dynamic time warping lines up your movement from the stance onward with the pro&rsquo;s, so load, foot plant, contact, extension and finish line up even if your timing differs. Then key events are refined from your own motion.</li>
+        <li><strong>Feedback.</strong> About 30 checks compare what a side camera can measure: stance width, hand position, weight shift, stride, head movement, front-leg brace, spine tilt, hip and shoulder turn, contact point, extension, finish and timing.</li>
+      </ol>
+      <p class="muted small">Limits: a single side camera sees the swing in 2D, so rotation is estimated from how much the hips and shoulders narrow, and joint angles are apparent angles. The starter database holds clearly labeled synthetic placeholder swings. Real MLB swings can be added with the <a href="builder.html">database builder</a> or from OpenPose output (see the README).</p>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>Runs entirely in your browser. Videos never leave your device.</p>
+  </footer>
+
+  <script type="module" src="src/app.js"></script>
+</body>
+</html>

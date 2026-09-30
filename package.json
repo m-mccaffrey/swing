@@ -1,0 +1,20 @@
+{
+  "name": "swing-match",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Compare a side-view baseball swing to MLB swings stored as OpenPose BODY_25 keypoints.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"tests/*.test.mjs\"",
+    "gen": "node scripts/generate-synthetic.mjs",
+    "build": "node scripts/build.mjs",
+    "serve": "node scripts/serve.mjs",
+    "dev": "node scripts/serve.mjs --root ."
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@mediapipe/tasks-vision": "1.0.1"
+  }
+}

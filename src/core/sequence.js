@@ -1,0 +1,375 @@
+// Sequence-level processing: left/right label repair, gap filling, smoothing,
+// orientation (which side of the frame the pitcher is on), stance-frame
+// suggestion, and canonicalization into a view-independent coordinate frame.
+//
+// Canonical coordinates:
+//   * x points toward the pitcher, y points up (meters are not known, so the
+//     unit is one "torso length" (TL) = Neck→MidHip distance at the stance).
+//   * origin is the MidHip at the stance frame.
+//   * "L*" BODY_25 joints are the FRONT side (closest to the pitcher), "R*"
+//     the BACK side. A left-handed hitter therefore looks like a right-handed
+//     one after canonicalization, and a video filmed from the hitter's back is
+//     (orthographically) the mirror of one filmed from the chest, which the
+//     flip undoes. That is what lets any side view be compared to any other.
+
+import { KP, NUM_KP, LR_GROUPS, kx, ky, kc, emptyFrame, swapLR } from './body25.js';
+import { clamp, fillGaps, gaussianSmooth, median, mean, derivative } from './math.js';
+
+const MIN_CONF = 0.25;
+
+function pt(f, j) {
+  return f[j * 3 + 2] > MIN_CONF ? [f[j * 3], f[j * 3 + 1]] : null;
+}
+
+function midOf(f, a, b) {
+  const pa = pt(f, a);
+  const pb = pt(f, b);
+  if (pa && pb) return [(pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2];
+  return pa || pb;
+}
+
+/** Median Neck→MidHip distance (pixels) over a window of frames. */
+export function torsoLength(frames, center = null, halfWindow = 3) {
+  const lo = center == null ? 0 : Math.max(0, center - halfWindow);
+  const hi = center == null ? frames.length : Math.min(frames.length, center + halfWindow + 1);
+  const d = [];
+  for (let i = lo; i < hi; i++) {
+    const n = pt(frames[i], KP.Neck);
+    const h = pt(frames[i], KP.MidHip);
+    if (n && h) d.push(Math.hypot(n[0] - h[0], n[1] - h[1]));
+  }
+  const m = median(d);
+  if (Number.isFinite(m) && m > 1e-6) return m;
+  return center == null ? NaN : torsoLength(frames, null);
+}
+
+/** Cost of assigning `f`'s group joints (optionally swapped) to reference frame `ref`. */
+function groupCost(f, ref, pairs, swapped) {
+  let cost = 0;
+  let n = 0;
+  for (const [a, b] of pairs) {
+    for (const [src, dst] of swapped ? [[a, b], [b, a]] : [[a, a], [b, b]]) {
+      const p = pt(f, src);
+      const q = pt(ref, dst);
+      if (p && q) {
+        cost += Math.hypot(p[0] - q[0], p[1] - q[1]);
+        n++;
+      }
+    }
+  }
+  return n ? cost / n : NaN;
+}
+
+/**
+ * Fix left/right label flicker (common in side views) by walking outward from
+ * a reference frame and, per joint group, keeping whichever labelling is most
+ * continuous with the previous (already corrected) frame.
+ */
+export function fixLeftRightFlicker(frames, refIndex = 0) {
+  const out = frames.map((f) => f.slice());
+  const walk = (from, to, step) => {
+    let prev = out[from];
+    for (let i = from + step; step > 0 ? i <= to : i >= to; i += step) {
+      let f = out[i];
+      for (const pairs of Object.values(LR_GROUPS)) {
+        const keep = groupCost(f, prev, pairs, false);
+        const swap = groupCost(f, prev, pairs, true);
+        if (Number.isFinite(keep) && Number.isFinite(swap) && swap < keep * 0.7) f = swapLR(f, pairs);
+      }
+      out[i] = f;
+      // Carry forward the last good reference for joints missing in this frame.
+      const merged = prev.slice();
+      for (let j = 0; j < NUM_KP; j++) {
+        if (f[j * 3 + 2] > MIN_CONF) {
+          merged[j * 3] = f[j * 3];
+          merged[j * 3 + 1] = f[j * 3 + 1];
+          merged[j * 3 + 2] = f[j * 3 + 2];
+        }
+      }
+      prev = merged;
+    }
+  };
+  if (!out.length) return out;
+  const r = clamp(refIndex, 0, out.length - 1);
+  walk(r, out.length - 1, 1);
+  walk(r, 0, -1);
+  return out;
+}
+
+/**
+ * Fill short gaps and lightly smooth every keypoint track. Interpolated points
+ * get a low (but non-zero) confidence so later steps can down-weight them.
+ */
+export function cleanSequence(frames, { fps = 30, maxGapSec = 0.2, smoothSec = 0.018 } = {}) {
+  const n = frames.length;
+  const out = frames.map(() => emptyFrame());
+  const maxGap = Math.max(1, Math.round(maxGapSec * fps));
+  const sigma = smoothSec * fps;
+  for (let j = 0; j < NUM_KP; j++) {
+    const xs = [];
+    const ys = [];
+    const cs = [];
+    for (let i = 0; i < n; i++) {
+      const ok = frames[i][j * 3 + 2] > MIN_CONF;
+      xs.push(ok ? frames[i][j * 3] : NaN);
+      ys.push(ok ? frames[i][j * 3 + 1] : NaN);
+      cs.push(frames[i][j * 3 + 2]);
+    }
+    const fx = gaussianSmooth(fillGaps(xs, maxGap), sigma);
+    const fy = gaussianSmooth(fillGaps(ys, maxGap), sigma);
+    for (let i = 0; i < n; i++) {
+      if (Number.isFinite(fx[i]) && Number.isFinite(fy[i])) {
+        out[i][j * 3] = fx[i];
+        out[i][j * 3 + 1] = fy[i];
+        out[i][j * 3 + 2] = Number.isFinite(xs[i]) ? cs[i] : 0.2;
+      }
+    }
+  }
+  return out;
+}
+
+/** Wrist-midpoint speed series in torso-lengths per second (image space). */
+export function handSpeedSeries(frames, fps) {
+  const tl = torsoLength(frames) || 1;
+  const hx = frames.map((f) => midOf(f, KP.LWrist, KP.RWrist)?.[0] ?? NaN);
+  const hy = frames.map((f) => midOf(f, KP.LWrist, KP.RWrist)?.[1] ?? NaN);
+  const sx = gaussianSmooth(fillGaps(hx), fps / 60);
+  const sy = gaussianSmooth(fillGaps(hy), fps / 60);
+  const dx = derivative(sx);
+  const dy = derivative(sy);
+  return dx.map((v, i) => (Math.hypot(v, dy[i]) * fps) / tl);
+}
+
+/** Whole-body motion energy (TL/s): mean speed of wrists, ankles, nose, hips. */
+export function motionEnergy(frames, fps) {
+  const tl = torsoLength(frames) || 1;
+  const joints = [KP.LWrist, KP.RWrist, KP.LAnkle, KP.RAnkle, KP.Nose, KP.MidHip, KP.LKnee, KP.RKnee];
+  const per = joints.map((j) => {
+    const xs = gaussianSmooth(fillGaps(frames.map((f) => (kc(f, j) > MIN_CONF ? kx(f, j) : NaN))), fps / 30);
+    const ys = gaussianSmooth(fillGaps(frames.map((f) => (kc(f, j) > MIN_CONF ? ky(f, j) : NaN))), fps / 30);
+    const dx = derivative(xs);
+    const dy = derivative(ys);
+    return dx.map((v, i) => (Math.hypot(v, dy[i]) * fps) / tl);
+  });
+  return frames.map((_, i) => mean(per.map((s) => s[i]).filter(Number.isFinite)));
+}
+
+/**
+ * Suggest the stance (set-up) frame: the end of the last quiet period before
+ * the fastest hand movement in the clip (the swing).
+ */
+export function suggestStanceFrame(frames, fps) {
+  const n = frames.length;
+  if (n < 3) return 0;
+  const speed = handSpeedSeries(frames, fps);
+  let peak = 0;
+  for (let i = 1; i < n; i++) if ((speed[i] || 0) > (speed[peak] || 0)) peak = i;
+  const energy = motionEnergy(frames, fps);
+  const sorted = energy.filter(Number.isFinite).sort((a, b) => a - b);
+  const p20 = sorted[Math.floor(sorted.length * 0.2)] ?? 0;
+  const thr = Math.max(0.3, p20 * 1.8);
+  const minRun = Math.max(2, Math.round(0.12 * fps));
+  let run = 0;
+  // Walk backward from shortly before the swing looking for a quiet run.
+  for (let i = peak - Math.round(0.1 * fps); i >= 0; i--) {
+    if (energy[i] < thr) {
+      run++;
+      if (run >= minRun) {
+        // i is the start of the run; the stance is the quiet frame right before the load.
+        let end = i + run - 1;
+        while (end + 1 < peak && energy[end + 1] < thr) end++;
+        // Back off slightly from the first hint of the load.
+        return Math.max(i, end - Math.round(0.08 * fps));
+      }
+    } else {
+      run = 0;
+    }
+  }
+  return clamp(peak - Math.round(1.0 * fps), 0, n - 1);
+}
+
+/**
+ * Guess whether the pitcher is to the right or left of the frame using
+ * independent cues: head turned toward the pitcher, hands held back away from
+ * the pitcher, stride direction, and the direction the hands travel through
+ * the swing. Returns { side, confidence, votes }.
+ */
+export function detectPitcherSide(frames, stanceIndex, fps) {
+  const n = frames.length;
+  const s = clamp(stanceIndex, 0, n - 1);
+  const tl = torsoLength(frames, s) || torsoLength(frames) || 1;
+  const win = Math.max(1, Math.round(0.15 * fps));
+  const votes = [];
+
+  // 1. Head turn: the nose sits on the pitcher's side of the ears.
+  const head = [];
+  for (let i = Math.max(0, s - win); i <= Math.min(n - 1, s + win); i++) {
+    const nose = pt(frames[i], KP.Nose);
+    const ears = midOf(frames[i], KP.LEar, KP.REar);
+    if (nose && ears) head.push(nose[0] - ears[0]);
+  }
+  if (head.length) votes.push({ cue: 'head turn', value: clamp(median(head) / (0.15 * tl), -1, 1), weight: 1 });
+
+  // 2. Hands are held back, away from the pitcher, at the stance.
+  const hands = midOf(frames[s], KP.LWrist, KP.RWrist);
+  const hip = pt(frames[s], KP.MidHip);
+  if (hands && hip) votes.push({ cue: 'hands held back', value: clamp((hip[0] - hands[0]) / (0.3 * tl), -1, 1), weight: 1 });
+
+  // 3. Stride: the ankle that travels farthest moves toward the pitcher.
+  let bestDx = 0;
+  for (const j of [KP.LAnkle, KP.RAnkle]) {
+    const a0 = pt(frames[s], j);
+    if (!a0) continue;
+    for (let i = s; i < n; i++) {
+      const a = pt(frames[i], j);
+      if (a && Math.abs(a[0] - a0[0]) > Math.abs(bestDx)) bestDx = a[0] - a0[0];
+    }
+  }
+  if (bestDx) votes.push({ cue: 'stride direction', value: clamp(bestDx / (0.6 * tl), -1, 1), weight: 1.5 });
+
+  // 4. Swing: the hands' biggest excursion from the stance is toward the pitcher.
+  if (hands) {
+    let best = 0;
+    for (let i = s; i < n; i++) {
+      const h = midOf(frames[i], KP.LWrist, KP.RWrist);
+      if (h && Math.abs(h[0] - hands[0]) > Math.abs(best)) best = h[0] - hands[0];
+    }
+    if (best) votes.push({ cue: 'hand path', value: clamp(best / (0.8 * tl), -1, 1), weight: 1.5 });
+  }
+
+  const wsum = votes.reduce((a, v) => a + v.weight, 0) || 1;
+  const score = votes.reduce((a, v) => a + v.value * v.weight, 0) / wsum;
+  return { side: score >= 0 ? 'right' : 'left', confidence: Math.min(1, Math.abs(score)), votes };
+}
+
+function xOf(f, j) {
+  return f[j * 3 + 2] > MIN_CONF ? f[j * 3] : NaN;
+}
+
+/**
+ * Canonicalize a raw pixel-space sequence. Returns
+ * { frames, transform } where frames are in canonical TL units (see top of
+ * file) and transform maps canonical points back into the source image.
+ */
+export function canonicalize(rawFrames, { pitcherSide = 'right', stanceIndex = 0, fps = 30, clean = true } = {}) {
+  const n = rawFrames.length;
+  if (!n) throw new Error('No frames to analyze');
+  const s = clamp(stanceIndex, 0, n - 1);
+  const sx = pitcherSide === 'left' ? -1 : 1;
+
+  // 1. Flip so the pitcher is toward +x (still pixel units, y down).
+  let frames = rawFrames.map((f) => {
+    const g = f.slice();
+    for (let j = 0; j < NUM_KP; j++) g[j * 3] = sx * f[j * 3];
+    return g;
+  });
+
+  // 2. Decide front/back labels per joint group from geometry at the stance:
+  //    the front side is the one closer to the pitcher (larger x).
+  const win = [];
+  for (let i = Math.max(0, s - 2); i <= Math.min(n - 1, s + 2); i++) win.push(frames[i]);
+  const sideScore = (pairs) => {
+    let score = 0;
+    for (const [r, l] of pairs) {
+      const d = median(win.map((f) => xOf(f, l) - xOf(f, r)));
+      if (Number.isFinite(d)) score += d;
+    }
+    return score;
+  };
+  const armScore = sideScore([[KP.RShoulder, KP.LShoulder], [KP.RElbow, KP.LElbow]]);
+  const legScore = sideScore([[KP.RHip, KP.LHip], [KP.RKnee, KP.LKnee], [KP.RAnkle, KP.LAnkle]]);
+  const swapArms = armScore < 0;
+  const swapLegs = legScore < 0;
+  if (swapArms || swapLegs) {
+    frames = frames.map((f) => {
+      let g = f;
+      if (swapArms) g = swapLR(g, [...LR_GROUPS.arms, ...LR_GROUPS.head]);
+      if (swapLegs) g = swapLR(g, LR_GROUPS.legs);
+      return g;
+    });
+  }
+
+  // 3. Repair frame-to-frame flicker, then fill gaps and smooth.
+  frames = fixLeftRightFlicker(frames, s);
+  if (clean) frames = cleanSequence(frames, { fps });
+
+  // 4. Normalize: origin at stance MidHip, unit = stance torso length, y up.
+  const scale = torsoLength(frames, s, 2);
+  if (!Number.isFinite(scale)) throw new Error('Could not find the hitter’s torso (neck and hips) in the stance frame');
+  const originFrame = frames[s];
+  let ox = kc(originFrame, KP.MidHip) > 0 ? kx(originFrame, KP.MidHip) : NaN;
+  let oy = kc(originFrame, KP.MidHip) > 0 ? ky(originFrame, KP.MidHip) : NaN;
+  if (!Number.isFinite(ox)) {
+    ox = median(frames.map((f) => xOf(f, KP.MidHip)));
+    oy = median(frames.map((f) => (kc(f, KP.MidHip) > MIN_CONF ? ky(f, KP.MidHip) : NaN)));
+  }
+  const canon = frames.map((f) => {
+    const g = emptyFrame();
+    for (let j = 0; j < NUM_KP; j++) {
+      const c = f[j * 3 + 2];
+      if (c > 0) {
+        g[j * 3] = (f[j * 3] - ox) / scale;
+        g[j * 3 + 1] = -(f[j * 3 + 1] - oy) / scale;
+        g[j * 3 + 2] = c;
+      }
+    }
+    return g;
+  });
+
+  return {
+    frames: canon,
+    transform: { sx, ox: sx * ox, oy, scale, swapArms, swapLegs, stanceIndex: s, pitcherSide },
+  };
+}
+
+/** Map a canonical point back to source-image pixel coordinates. */
+export function canonToImage(transform, x, y) {
+  return [transform.ox + transform.sx * x * transform.scale, transform.oy - y * transform.scale];
+}
+
+/**
+ * Linearly resample frames from srcFps to dstFps. Returns { frames, srcIndex }
+ * where srcIndex[k] is the (fractional) source index of output frame k.
+ */
+export function resampleFrames(frames, srcFps, dstFps, startIndex = 0, endIndex = frames.length - 1) {
+  const out = [];
+  const srcIndex = [];
+  const dur = (endIndex - startIndex) / srcFps;
+  const count = Math.max(1, Math.floor(dur * dstFps + 1e-6) + 1);
+  for (let k = 0; k < count; k++) {
+    const si = startIndex + (k / dstFps) * srcFps;
+    const i0 = Math.floor(si);
+    const i1 = Math.min(endIndex, i0 + 1);
+    const t = si - i0;
+    const a = frames[i0];
+    const b = frames[i1];
+    const g = emptyFrame();
+    for (let j = 0; j < NUM_KP; j++) {
+      const ca = a[j * 3 + 2];
+      const cb = b[j * 3 + 2];
+      if (ca > 0 && cb > 0) {
+        g[j * 3] = a[j * 3] + (b[j * 3] - a[j * 3]) * t;
+        g[j * 3 + 1] = a[j * 3 + 1] + (b[j * 3 + 1] - a[j * 3 + 1]) * t;
+        g[j * 3 + 2] = Math.min(ca, cb);
+      } else if (ca > 0 || cb > 0) {
+        const src = t < 0.5 && ca > 0 ? a : cb > 0 ? b : a;
+        g[j * 3] = src[j * 3];
+        g[j * 3 + 1] = src[j * 3 + 1];
+        g[j * 3 + 2] = src[j * 3 + 2] * 0.5;
+      }
+    }
+    out.push(g);
+    srcIndex.push(si);
+  }
+  return { frames: out, srcIndex };
+}
+
+/** Fraction of frames where the core body (neck, hips, a wrist, an ankle) was found. */
+export function detectionCoverage(frames) {
+  if (!frames.length) return 0;
+  let ok = 0;
+  for (const f of frames) {
+    if (pt(f, KP.Neck) && pt(f, KP.MidHip) && (pt(f, KP.LWrist) || pt(f, KP.RWrist)) && (pt(f, KP.LAnkle) || pt(f, KP.RAnkle))) ok++;
+  }
+  return ok / frames.length;
+}

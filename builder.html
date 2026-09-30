@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pro Database Builder</title>
+  <meta name="description" content="Turn an MLB swing video or OpenPose output into a Swing Match database entry.">
+  <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./">
+      <img src="assets/icon.svg" alt="" width="28" height="28">
+      <span>Swing Match</span>
+    </a>
+    <nav>
+      <a href="./">Analyze</a>
+      <a href="builder.html" aria-current="page">Database builder</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <h1>Pro database builder</h1>
+      <p>Build the stockpile of pro swings. Load a side-view MLB swing (video, or OpenPose <code>--write_json</code> output), check the stance and phase frames, add the player&rsquo;s details and export a database entry. Save it in this browser to use it right away on the Analyze page, or commit it to <code>data/pros/</code> to publish it for everyone.</p>
+      <p class="notice error" id="error" hidden role="alert"></p>
+    </section>
+
+    <section class="card" aria-labelledby="h-src">
+      <div class="step-head"><span class="step-num">1</span><h2 id="h-src">Load a swing</h2></div>
+      <div class="form-grid">
+        <label>Swing video
+          <input type="file" id="b-video" accept="video/*">
+        </label>
+        <label>OpenPose per-frame JSON files (select all)
+          <input type="file" id="b-openpose" accept=".json,application/json" multiple>
+        </label>
+        <label>Frame rate of those JSON frames (fps)
+          <input type="number" id="b-op-fps" min="1" step="1" value="60">
+        </label>
+        <label>Existing database entry (to edit)
+          <input type="file" id="b-entry" accept=".json,application/json">
+        </label>
+      </div>
+      <div class="form-grid" style="margin-top:12px">
+        <label>Pose model (video only)
+          <select id="b-quality">
+            <option value="full">Balanced (full)</option>
+            <option value="heavy" selected>Most accurate (heavy, slow)</option>
+            <option value="lite">Fast (lite)</option>
+          </select>
+        </label>
+        <label>Analyze frames per second (video only)
+          <select id="b-afps">
+            <option value="auto" selected>Auto (match video, max 60)</option>
+            <option value="30">30</option>
+            <option value="60">60</option>
+          </select>
+        </label>
+        <label>Video start (s) <input type="number" id="b-start" value="0" step="0.1" min="0"></label>
+        <label>Video end (s) <input type="number" id="b-end" value="0" step="0.1" min="0"></label>
+      </div>
+      <div class="btn-row">
+        <button class="btn primary" id="b-analyze" type="button" disabled>Detect poses in video</button>
+      </div>
+      <div id="b-progress" hidden>
+        <div class="progress"><span></span></div>
+        <p class="muted small" id="b-progress-text"></p>
+      </div>
+    </section>
+
+    <section class="card" id="b-edit" hidden aria-labelledby="h-edit">
+      <div class="step-head"><span class="step-num">2</span><h2 id="h-edit">Check the frames</h2></div>
+      <div class="builder-grid">
+        <div>
+          <div class="stage-wrap" id="b-stage"></div>
+          <div class="scrubber">
+            <button class="btn icon" id="b-prev" type="button" aria-label="Previous frame">&#9664;</button>
+            <input type="range" id="b-slider" min="0" max="0" value="0" aria-label="Frame">
+            <button class="btn icon" id="b-next" type="button" aria-label="Next frame">&#9654;</button>
+          </div>
+          <p class="muted small center" id="b-frame-label"></p>
+        </div>
+        <div>
+          <fieldset class="segmented" id="b-side">
+            <legend>The pitcher is to the</legend>
+            <label><input type="radio" name="bside" value="left"> <span>&larr; Left</span></label>
+            <label><input type="radio" name="bside" value="right"> <span>Right &rarr;</span></label>
+          </fieldset>
+          <h3 class="sub-h">Phase frames</h3>
+          <p class="muted small">Auto-detected. Scrub to each moment and press <em>Set</em> to correct it.</p>
+          <div class="phase-table" id="b-phases"></div>
+          <button class="btn ghost" id="b-redetect" type="button" style="margin-top:10px">Re-detect phases from the stance frame</button>
+          <h3 class="sub-h">Normalized view</h3>
+          <canvas id="b-canon" class="scene-canvas" aria-label="Normalized skeleton with the pitcher to the right"></canvas>
+          <p class="muted small">Should show the hitter with the pitcher to the right. This is what gets compared.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" id="b-meta" hidden aria-labelledby="h-meta">
+      <div class="step-head"><span class="step-num">3</span><h2 id="h-meta">Player details and export</h2></div>
+      <div class="form-grid">
+        <label>Player name <input type="text" id="m-name" placeholder="e.g. Player Name"></label>
+        <label>ID <input type="text" id="m-id" placeholder="auto from name"></label>
+        <label>Team <input type="text" id="m-team"></label>
+        <label>Bats
+          <select id="m-bats"><option value="R">Right</option><option value="L">Left</option><option value="S">Switch</option></select>
+        </label>
+        <label>Video fps <input type="number" id="m-fps" min="1" step="1"></label>
+        <label>Slow-motion factor <input type="number" id="m-speed" min="1" step="1" value="1"></label>
+        <label>Source (URL or description) <input type="text" id="m-source"></label>
+        <label>Notes <input type="text" id="m-notes"></label>
+      </div>
+      <div class="btn-row">
+        <button class="btn primary" id="b-download" type="button">Download entry JSON</button>
+        <button class="btn" id="b-save" type="button">Save to this browser</button>
+      </div>
+      <p class="muted small" id="b-saved"></p>
+      <h3 class="sub-h">Publishing it for everyone</h3>
+      <p class="muted small">Commit the downloaded file to <code>data/pros/</code> and add a line to <code>data/pros/index.json</code>:</p>
+      <pre class="snippet" id="b-snippet"></pre>
+      <p class="muted small">Only use footage you have the rights to use, and keep the source so entries can be checked.</p>
+    </section>
+
+    <section class="card" aria-labelledby="h-local">
+      <h2 id="h-local">Saved in this browser</h2>
+      <ul id="b-local" class="feedback-list" style="list-style:none;padding:0"></ul>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>Runs entirely in your browser. Videos never leave your device.</p>
+  </footer>
+
+  <script type="module" src="src/builder.js"></script>
+</body>
+</html>

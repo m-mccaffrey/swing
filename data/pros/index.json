@@ -1,0 +1,26 @@
+{
+  "schema": "swing-db-index/v1",
+  "entries": [
+    {
+      "id": "synthetic-a",
+      "file": "synthetic-a.json",
+      "name": "Placeholder A — leg kick, hands high",
+      "bats": "R",
+      "synthetic": true
+    },
+    {
+      "id": "synthetic-b",
+      "file": "synthetic-b.json",
+      "name": "Placeholder B — wide & crouched, toe tap",
+      "bats": "R",
+      "synthetic": true
+    },
+    {
+      "id": "synthetic-c",
+      "file": "synthetic-c.json",
+      "name": "Placeholder C — upright, big stride (LHH)",
+      "bats": "L",
+      "synthetic": true
+    }
+  ]
+}
