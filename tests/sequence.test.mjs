@@ -23,11 +23,11 @@ test('canonical form is independent of camera side, framing and handedness', () 
   const other = reframe(mirror(frames, 1280), 1.7, -300, 120);
   const canon = canonicalize(other, { pitcherSide: 'left', stanceIndex: entry.stanceFrame, fps: 60 }).frames;
   assert.ok(maxAbsDiff(base, canon) < 1e-6, `max diff ${maxAbsDiff(base, canon)}`);
-  // Stance MidHip is the origin and the torso is one unit long.
+  // Stance MidHip is the origin; the unit is about one adult torso length.
   const s = base[entry.stanceFrame];
   assert.ok(Math.abs(s[KP.MidHip * 3]) < 1e-9 && Math.abs(s[KP.MidHip * 3 + 1]) < 1e-9);
   const torso = Math.hypot(s[KP.Neck * 3] - s[KP.MidHip * 3], s[KP.Neck * 3 + 1] - s[KP.MidHip * 3 + 1]);
-  assert.ok(Math.abs(torso - 1) < 0.02, `torso ${torso}`);
+  assert.ok(Math.abs(torso - 1) < 0.15, `torso ${torso}`);
   // Front (L) side is toward the pitcher (+x) at the stance.
   assert.ok(s[KP.LAnkle * 3] > s[KP.RAnkle * 3]);
   assert.ok(s[KP.LShoulder * 3] > s[KP.RShoulder * 3]);

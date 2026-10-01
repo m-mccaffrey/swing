@@ -84,6 +84,46 @@ export function similarityFromDistance(d, sigma = STANCE_SIGMA) {
   return 100 * Math.exp(-(d * d) / (2 * sigma * sigma));
 }
 
+// Skeleton tree rooted at MidHip: [child, parent].
+const BONES = [
+  [KP.Neck, KP.MidHip], [KP.Nose, KP.Neck], [KP.REye, KP.Nose], [KP.LEye, KP.Nose], [KP.REar, KP.REye], [KP.LEar, KP.LEye],
+  [KP.RShoulder, KP.Neck], [KP.RElbow, KP.RShoulder], [KP.RWrist, KP.RElbow],
+  [KP.LShoulder, KP.Neck], [KP.LElbow, KP.LShoulder], [KP.LWrist, KP.LElbow],
+  [KP.RHip, KP.MidHip], [KP.RKnee, KP.RHip], [KP.RAnkle, KP.RKnee], [KP.RBigToe, KP.RAnkle], [KP.RSmallToe, KP.RBigToe], [KP.RHeel, KP.RAnkle],
+  [KP.LHip, KP.MidHip], [KP.LKnee, KP.LHip], [KP.LAnkle, KP.LKnee], [KP.LBigToe, KP.LAnkle], [KP.LSmallToe, KP.LBigToe], [KP.LHeel, KP.LAnkle],
+];
+
+/** Bone lengths of a reference pose (e.g. the user's stance). */
+export function boneLengths(ref) {
+  const out = {};
+  for (const [c, p] of BONES) {
+    if (ref[c * 3 + 2] > 0.05 && ref[p * 3 + 2] > 0.05) out[c] = Math.hypot(ref[c * 3] - ref[p * 3], ref[c * 3 + 1] - ref[p * 3 + 1]);
+  }
+  return out;
+}
+
+/**
+ * Retarget a pose onto another body's proportions: keep every bone's
+ * direction from `frame` but use the lengths in `lengths`, starting from the
+ * frame's MidHip. A pro drawn this way has the user's limb lengths, so feet,
+ * hands and head line up regardless of age or build.
+ */
+export function retarget(frame, lengths) {
+  if (!lengths || !(frame[KP.MidHip * 3 + 2] > 0.05)) return frame;
+  const out = frame.slice();
+  for (const [c, p] of BONES) {
+    if (!(frame[c * 3 + 2] > 0.05) || !(frame[p * 3 + 2] > 0.05) || !(out[p * 3 + 2] > 0.05)) continue;
+    const dx = frame[c * 3] - frame[p * 3];
+    const dy = frame[c * 3 + 1] - frame[p * 3 + 1];
+    const d = Math.hypot(dx, dy);
+    const L = lengths[c] ?? d;
+    const k = d > 1e-9 ? L / d : 0;
+    out[c * 3] = out[p * 3] + dx * k;
+    out[c * 3 + 1] = out[p * 3 + 1] + dy * k;
+  }
+  return out;
+}
+
 /**
  * Rank pros by stance similarity.
  * @param {number[]} userPose from stancePose()
@@ -92,7 +132,8 @@ export function similarityFromDistance(d, sigma = STANCE_SIGMA) {
 export function rankStances(userPose, pros) {
   return pros
     .map((pro) => {
-      const { distance, perJoint } = poseDistance(userPose, pro.stancePose);
+      // Compare shapes, not proportions: give the pro the user's bone lengths.
+      const { distance, perJoint } = poseDistance(userPose, retarget(pro.stancePose, boneLengths(userPose)));
       return { pro, distance, similarity: similarityFromDistance(distance), perJoint };
     })
     .sort((a, b) => a.distance - b.distance);

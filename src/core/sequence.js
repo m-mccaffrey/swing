@@ -28,6 +28,35 @@ function midOf(f, a, b) {
   return pa || pb;
 }
 
+/**
+ * Whole-body length (pixels): Neck→MidHip plus the average thigh and shin,
+ * divided by BODY_TO_TORSO so the unit still reads as an adult torso length.
+ * Using the legs too means kids (relatively shorter legs) and adults scale
+ * consistently from head to toe, not just at the torso.
+ */
+export const BODY_TO_TORSO = 2.75;
+
+export function bodyScale(frames, center, halfWindow = 2) {
+  const lo = Math.max(0, center - halfWindow);
+  const hi = Math.min(frames.length, center + halfWindow + 1);
+  const seg = (f, a, b) => {
+    const p = pt(f, a);
+    const q = pt(f, b);
+    return p && q ? Math.hypot(p[0] - q[0], p[1] - q[1]) : NaN;
+  };
+  const avg = (a, b) => (Number.isFinite(a) && Number.isFinite(b) ? (a + b) / 2 : Number.isFinite(a) ? a : b);
+  const d = [];
+  for (let i = lo; i < hi; i++) {
+    const f = frames[i];
+    const torso = seg(f, KP.Neck, KP.MidHip);
+    const thigh = avg(seg(f, KP.LHip, KP.LKnee), seg(f, KP.RHip, KP.RKnee));
+    const shin = avg(seg(f, KP.LKnee, KP.LAnkle), seg(f, KP.RKnee, KP.RAnkle));
+    if ([torso, thigh, shin].every(Number.isFinite)) d.push((torso + thigh + shin) / BODY_TO_TORSO);
+  }
+  const m = median(d);
+  return Number.isFinite(m) && m > 1e-6 ? m : torsoLength(frames, center, halfWindow);
+}
+
 /** Median Neck→MidHip distance (pixels) over a window of frames. */
 export function torsoLength(frames, center = null, halfWindow = 3) {
   const lo = center == null ? 0 : Math.max(0, center - halfWindow);
@@ -294,7 +323,7 @@ export function canonicalize(rawFrames, { pitcherSide = 'right', stanceIndex = 0
   if (clean) frames = cleanSequence(frames, { fps });
 
   // 4. Normalize: origin at stance MidHip, unit = stance torso length, y up.
-  const scale = torsoLength(frames, s, 2);
+  const scale = bodyScale(frames, s, 2);
   if (!Number.isFinite(scale)) throw new Error('Could not find the hitter’s torso (neck and hips) in the stance frame');
   const originFrame = frames[s];
   let ox = kc(originFrame, KP.MidHip) > 0 ? kx(originFrame, KP.MidHip) : NaN;

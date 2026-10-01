@@ -4,7 +4,7 @@
 import { loadDatabase, makeEntry } from './core/db.js';
 import { prepareSwing, compareSwing } from './core/compare.js';
 import { detectPitcherSide, suggestStanceFrame, canonToImage, detectionCoverage } from './core/sequence.js';
-import { rankStances } from './core/match.js';
+import { rankStances, retarget, boneLengths } from './core/match.js';
 import { evaluateFeedback, summarize, formatValue, formatDelta, TORSO_TO_HEIGHT } from './core/feedback.js';
 import { PHASES, phaseLabel } from './core/phases.js';
 import { demoUserSwing } from './core/synth.js';
@@ -329,6 +329,7 @@ function compare() {
     return;
   }
   showError('');
+  state.userBones = null;
   state.ranking = rankStances(state.user.stancePose, state.pros);
   // The video element moves into the results player, so the stance step closes.
   show('step-stance', false);
@@ -348,8 +349,15 @@ function reopenStance() {
   showStanceFrame(state.stanceIndex);
 }
 
+/** Pro frame redrawn with the user's limb lengths (see retarget()). */
+function fitPro(f) {
+  if (!state.userBones) state.userBones = boneLengths(state.user.stancePose);
+  return retarget(f, state.userBones);
+}
+
 function selectPro(pro) {
   state.pro = pro;
+  state.proFitted = null;
   state.comparison = compareSwing(state.user, pro.prep);
   const userForRules = { ...state.user, phases: state.comparison.phases };
   state.items = evaluateFeedback(userForRules, pro.prep, { proName: pro.name.split(' — ')[0], timingKnown: true });
@@ -409,7 +417,7 @@ function renderRanking() {
 function renderStanceCanvas() {
   const canvas = $('stance-canvas');
   const u = state.user.canon[state.user.stanceIndex];
-  const p = state.pro.prep.canon[state.pro.prep.stanceIndex];
+  const p = fitPro(state.pro.prep.canon[state.pro.prep.stanceIndex]);
   const w = canvas.clientWidth || 480;
   const h = canvas.clientHeight || 360;
   const ctx = fitCanvas(canvas, w, h);
@@ -600,7 +608,7 @@ function drawResultFrame(i) {
   };
   const proColor = cssVar('--series-pro', '#eb6834');
   stages.result.draw((ctx, map, u) => {
-    if (ghostOn && i >= user.stanceIndex) drawSkeleton(ctx, toImg(pro.canon[j]), { map, color: proColor, lineWidth: 3 * u, radius: 0, alpha: 0.85, outline: 'rgba(0,0,0,0.35)' });
+    if (ghostOn && i >= user.stanceIndex) drawSkeleton(ctx, toImg(fitPro(pro.canon[j])), { map, color: proColor, lineWidth: 3 * u, radius: 0, alpha: 0.85, outline: 'rgba(0,0,0,0.35)' });
     drawSkeleton(ctx, toImg(user.canon[i]), { map, lineWidth: 3 * u, radius: 3 * u, outline: 'rgba(0,0,0,0.45)' });
   });
   const canvas = $('scene-canvas');
@@ -616,9 +624,9 @@ function drawResultFrame(i) {
   drawScene(ctx, w, h, {
     bounds: state.sceneBounds,
     user: user.canon[i],
-    pro: i >= user.stanceIndex ? pro.canon[j] : pro.canon[pro.stanceIndex],
+    pro: fitPro(i >= user.stanceIndex ? pro.canon[j] : pro.canon[pro.stanceIndex]),
     userTrail: { frames: user.canon, from: user.stanceIndex, to: c.endUserIndex },
-    proTrail: { frames: pro.canon, from: pro.stanceIndex, to: pro.phases.finish },
+    proTrail: { frames: (state.proFitted ||= pro.canon.map(fitPro)), from: pro.stanceIndex, to: pro.phases.finish },
     caption: `${cur ? phaseLabel(cur) : 'Before stance'} · ${fmtTime(a.times[i])}`,
   });
 }
