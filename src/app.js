@@ -3,8 +3,8 @@
 
 import { loadDatabase, makeEntry } from './core/db.js';
 import { prepareSwing, compareSwing } from './core/compare.js';
-import { detectPitcherSide, suggestStanceFrame, canonToImage, detectionCoverage } from './core/sequence.js';
-import { rankStances, retarget, boneLengths } from './core/match.js';
+import { detectPitcherSide, suggestStanceFrame, canonToImage, detectionCoverage, estimateSlowMotion } from './core/sequence.js';
+import { rankStances, rescaleBones } from './core/match.js';
 import { evaluateFeedback, summarize, formatValue, formatDelta, TORSO_TO_HEIGHT } from './core/feedback.js';
 import { PHASES, phaseLabel } from './core/phases.js';
 import { demoUserSwing } from './core/synth.js';
@@ -289,6 +289,9 @@ function afterAnalysis(saved = null) {
     note.textContent = `Your body was only found in ${Math.round(coverage * 100)}% of frames. Results may be less reliable; a clearer, steadier video helps.`;
   } else note.hidden = true;
 
+  state.slowmo = a.speedFactor === 1 ? estimateSlowMotion(a.frames, a.fps) : { factor: 1 };
+  renderSlowmoNotes();
+
   stages.stance?.destroy();
   stages.stance = new Stage($('stance-stage'), { video: state.video, width: a.width, height: a.height, label: stageLabel() });
   const slider = $('stance-slider');
@@ -351,7 +354,6 @@ function compare() {
   if (state.swingId) {
     library.updateSwing(state.swingId, { stanceIndex: state.stanceIndex, pitcherSide: state.pitcherSide, height: heightInches() }).catch(() => {});
   }
-  state.userBones = null;
   state.ranking = rankStances(state.user.stancePose, state.pros);
   // The video element moves into the results player, so the stance step closes.
   show('step-stance', false);
@@ -371,10 +373,9 @@ function reopenStance() {
   showStanceFrame(state.stanceIndex);
 }
 
-/** Pro frame redrawn with the user's limb lengths (see retarget()). */
+/** Pro frame redrawn with the user's limb proportions (see rescaleBones()). */
 function fitPro(f) {
-  if (!state.userBones) state.userBones = boneLengths(state.user.stancePose);
-  return retarget(f, state.userBones);
+  return rescaleBones(f, state.comparison?.proScales);
 }
 
 function selectPro(pro) {
@@ -868,6 +869,37 @@ function exportReport() {
     feedback: state.items.map(({ id, phase, label, unit, user, pro, delta, severity, message, tip }) => ({ id, phase, label, unit, user, pro, delta, severity, message, tip })),
     units: { len: 'torso lengths (Neck→MidHip at stance)', deg: 'degrees', sec: 'seconds' },
   });
+}
+
+/** Offer to treat a clip as slow motion when its hand speed says it is. */
+function renderSlowmoNotes() {
+  const est = state.slowmo;
+  for (const el of document.querySelectorAll('.slowmo-note')) {
+    el.textContent = '';
+    el.hidden = !(est && est.factor > 1 && state.analysis?.speedFactor === 1);
+    if (el.hidden) continue;
+    const text = document.createElement('span');
+    text.textContent = `This looks like slow motion (about ${est.factor}×): your fastest hand movement is only ${est.peak.toFixed(1)} torso-lengths per second, slower than any real-time swing. Timing and the stance pick assume real time until you fix it.`;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn small-btn';
+    btn.textContent = `Treat as ${est.factor}× slow motion`;
+    btn.addEventListener('click', () => applySlowMotion(est.factor));
+    el.append(text, btn);
+  }
+}
+
+/** Re-time an analyzed clip as slow motion (no need to re-run pose detection). */
+function applySlowMotion(factor) {
+  const a = state.analysis;
+  a.speedFactor = factor;
+  $('set-speed').value = String(factor);
+  state.slowmo = { factor: 1 };
+  if (state.swingId) library.updateSwing(state.swingId, { analysis: a, stanceIndex: null }).catch(() => {});
+  const wasResults = !$('results').hidden;
+  show('results', false);
+  afterAnalysis();
+  if (wasResults) compare();
 }
 
 // ---------------------------------------------------------------- saved swings

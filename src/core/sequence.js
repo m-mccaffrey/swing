@@ -184,6 +184,26 @@ export function motionEnergy(frames, fps) {
   return frames.map((_, i) => mean(per.map((s) => s[i]).filter(Number.isFinite)));
 }
 
+/** Peak 2D hand speed (torso lengths/s) below which a "real-time" clip is almost certainly slow motion. */
+export const SLOWMO_SPEED_LIMIT = 3;
+/** Conservative typical peak 2D hand speed of a real-time swing, used to guess the factor. */
+export const TYPICAL_HAND_SPEED = 8;
+
+/**
+ * Guess whether a clip that is supposed to be real time is actually slow
+ * motion: even slow real swings move the hands at 5+ torso lengths per second
+ * at their fastest, while a 4x replay of a fast swing peaks below 3.
+ * Returns { peak, factor } where factor is 1 (looks real time) or a power of
+ * two (2, 4, 8, 16). Only clear cases are flagged.
+ */
+export function estimateSlowMotion(frames, fps) {
+  let peak = 0;
+  for (const v of handSpeedSeries(frames, fps)) if (Number.isFinite(v) && v > peak) peak = v;
+  if (!(peak > 0) || peak >= SLOWMO_SPEED_LIMIT) return { peak, factor: 1 };
+  const factor = clamp(2 ** Math.round(Math.log2(TYPICAL_HAND_SPEED / peak)), 2, 16);
+  return { peak, factor };
+}
+
 /**
  * Suggest the stance (set-up) frame: the end of the last quiet period before
  * the fastest hand movement in the clip (the swing).
@@ -276,6 +296,59 @@ function xOf(f, j) {
   return f[j * 3 + 2] > MIN_CONF ? f[j * 3] : NaN;
 }
 
+const MAX_ROLL = (12 * Math.PI) / 180;
+const MIN_ROLL = (1 * Math.PI) / 180;
+
+/**
+ * Camera roll (radians, image coordinates) from the ground line: at the
+ * stance both feet are planted on level ground, so the line through the big
+ * toes (or the ankles if the toes aren't found) should be horizontal. Returns
+ * 0 when the feet are too close together, the estimate is tiny, or it is
+ * implausibly large (a raised foot rather than a tilted camera).
+ */
+export function estimateRoll(frames, stanceIndex, fps = 30) {
+  const n = frames.length;
+  const s = clamp(stanceIndex, 0, n - 1);
+  const tl = torsoLength(frames, s);
+  if (!Number.isFinite(tl)) return 0;
+  // The feet don't move during the stance: use ±150 ms so keypoint noise averages out.
+  const hw = Math.max(2, Math.round(0.15 * fps));
+  const lineAngles = (a, b) => {
+    const out = [];
+    for (let i = Math.max(0, s - hw); i <= Math.min(n - 1, s + hw); i++) {
+      const p = pt(frames[i], a);
+      const q = pt(frames[i], b);
+      if (!p || !q) continue;
+      const [l, r] = p[0] <= q[0] ? [p, q] : [q, p];
+      if (r[0] - l[0] < 0.5 * tl) continue;
+      out.push(Math.atan2(r[1] - l[1], r[0] - l[0]));
+    }
+    return out;
+  };
+  let angles = lineAngles(KP.LBigToe, KP.RBigToe);
+  if (angles.length < 3) angles = lineAngles(KP.LAnkle, KP.RAnkle);
+  const m = median(angles);
+  if (!Number.isFinite(m) || Math.abs(m) < MIN_ROLL || Math.abs(m) > MAX_ROLL) return 0;
+  return m;
+}
+
+function rotateFrames(frames, angle, cx, cy) {
+  const c = Math.cos(angle);
+  const sn = Math.sin(angle);
+  return frames.map((f) => {
+    const g = f.slice();
+    for (let j = 0; j < NUM_KP; j++) {
+      if (g[j * 3 + 2] > 0) {
+        const dx = f[j * 3] - cx;
+        const dy = f[j * 3 + 1] - cy;
+        g[j * 3] = cx + dx * c - dy * sn;
+        g[j * 3 + 1] = cy + dx * sn + dy * c;
+      }
+    }
+    return g;
+  });
+}
+
 /**
  * Canonicalize a raw pixel-space sequence. Returns
  * { frames, transform } where frames are in canonical TL units (see top of
@@ -293,6 +366,21 @@ export function canonicalize(rawFrames, { pitcherSide = 'right', stanceIndex = 0
     for (let j = 0; j < NUM_KP; j++) g[j * 3] = sx * f[j * 3];
     return g;
   });
+
+  // 1b. Level a tilted camera using the ground line at the stance.
+  const roll = estimateRoll(frames, s, fps);
+  let cx = 0;
+  let cy = 0;
+  if (roll) {
+    const win0 = frames.slice(Math.max(0, s - 2), Math.min(n, s + 3));
+    cx = median(win0.map((f) => xOf(f, KP.MidHip)));
+    cy = median(win0.map((f) => (kc(f, KP.MidHip) > MIN_CONF ? ky(f, KP.MidHip) : NaN)));
+    if (!Number.isFinite(cx) || !Number.isFinite(cy)) {
+      cx = 0;
+      cy = 0;
+    }
+    frames = rotateFrames(frames, -roll, cx, cy);
+  }
 
   // 2. Decide front/back labels per joint group from geometry at the stance:
   //    the front side is the one closer to the pitcher (larger x).
@@ -348,13 +436,24 @@ export function canonicalize(rawFrames, { pitcherSide = 'right', stanceIndex = 0
 
   return {
     frames: canon,
-    transform: { sx, ox: sx * ox, oy, scale, swapArms, swapLegs, stanceIndex: s, pitcherSide },
+    // ox/oy are in flipped, leveled pixel space; roll/cx/cy undo the leveling.
+    transform: { sx, ox, oy, scale, roll, cx, cy, swapArms, swapLegs, stanceIndex: s, pitcherSide },
   };
 }
 
 /** Map a canonical point back to source-image pixel coordinates. */
-export function canonToImage(transform, x, y) {
-  return [transform.ox + transform.sx * x * transform.scale, transform.oy - y * transform.scale];
+export function canonToImage(t, x, y) {
+  let px = t.ox + x * t.scale;
+  let py = t.oy - y * t.scale;
+  if (t.roll) {
+    const dx = px - t.cx;
+    const dy = py - t.cy;
+    const c = Math.cos(t.roll);
+    const s = Math.sin(t.roll);
+    px = t.cx + dx * c - dy * s;
+    py = t.cy + dx * s + dy * c;
+  }
+  return [t.sx * px, py];
 }
 
 /**

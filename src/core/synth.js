@@ -117,11 +117,14 @@ export const BASE_TRACKS = {
 export function makeSpec(over = {}) {
   const tracks = {};
   for (const [k, v] of Object.entries(BASE_TRACKS)) tracks[k] = { ...v, ...(over.tracks?.[k] || {}) };
+  // `tempo` stretches everything after the stance (1.2 = a 20% slower swing).
+  const tempo = over.tempo ?? 1;
+  const times = Object.fromEntries(Object.entries({ ...BASE_TIMES, ...(over.times || {}) }).map(([k, t]) => [k, t * tempo]));
   return {
     heightM: over.heightM ?? 1.88,
     bats: over.bats ?? 'R',
     idle: over.idle ?? 0,
-    times: { ...BASE_TIMES, ...(over.times || {}) },
+    times,
     tracks,
   };
 }
@@ -276,6 +279,39 @@ export function renderSwing(spec, o = {}) {
   const dt = 1 / (fps * speed);
   const count = Math.floor((t1 - t0) / dt) + 1;
   const sx = cam.pitcherSide === 'left' ? -1 : 1;
+  // Camera imperfections for robustness tests:
+  //   yaw      degrees the camera is turned away from perpendicular to the pitch path
+  //   roll     degrees the camera is tilted (image rotation)
+  //   distance meters to the hitter for a perspective camera (default: orthographic)
+  //   camHeight meters above the ground of a perspective camera's lens
+  const yaw = ((cam.yaw ?? 0) * Math.PI) / 180;
+  const roll = ((cam.roll ?? 0) * Math.PI) / 180;
+  const camH = cam.camHeight ?? 1.1;
+  const project = (p) => {
+    let X = p[0];
+    let Y = p[1];
+    if (yaw) [X, Y] = [X * Math.cos(yaw) - Y * Math.sin(yaw), X * Math.sin(yaw) + Y * Math.cos(yaw)];
+    let k = cam.pxPerM;
+    let u;
+    let v;
+    if (cam.distance) {
+      k = (cam.pxPerM * cam.distance) / (cam.distance - X);
+      u = cam.u0 + sx * k * Y;
+      v = cam.vGround - cam.pxPerM * camH - k * (p[2] - camH);
+    } else {
+      u = cam.u0 + sx * k * Y;
+      v = cam.vGround - k * p[2];
+    }
+    if (roll) {
+      const cx = cam.width / 2;
+      const cy = cam.height / 2;
+      const du = u - cx;
+      const dv = v - cy;
+      u = cx + du * Math.cos(roll) - dv * Math.sin(roll);
+      v = cy + du * Math.sin(roll) + dv * Math.cos(roll);
+    }
+    return [u, v];
+  };
   const frames = [];
   const times = [];
   for (let k = 0; k < count; k++) {
@@ -289,9 +325,8 @@ export function renderSwing(spec, o = {}) {
       let conf = 0.92 - 0.3 * clamp((depthRef - p[0] - 0.05) / 0.3, 0, 1);
       if (j === KP.LSmallToe || j === KP.RSmallToe) conf *= 0.6;
       conf = clamp(conf + gauss(rand) * 0.02, 0.05, 0.99);
-      const u = cam.u0 + sx * cam.pxPerM * p[1] + gauss(rand) * (o.noisePx ?? 0);
-      const v = cam.vGround - cam.pxPerM * p[2] + gauss(rand) * (o.noisePx ?? 0);
-      setKp(f, j, u, v, conf);
+      const [u, v] = project(p);
+      setKp(f, j, u + gauss(rand) * (o.noisePx ?? 0), v + gauss(rand) * (o.noisePx ?? 0), conf);
     }
     // A left-handed hitter is the mirror image of a right-handed one.
     if (spec.bats === 'L') f = swapLR(f);

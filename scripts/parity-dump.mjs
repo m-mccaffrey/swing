@@ -2,10 +2,10 @@
 // Prints JS detection results on a few test swings as JSON, so the Python
 // port in tools/swingdb/analysis.py can be checked against it
 // (tools/tests/test_swingdb.py).
-import { archetypeEntry, demoUserSwing } from '../src/core/synth.js';
+import { archetypeEntry, demoUserSwing, makeSpec, renderSwing } from '../src/core/synth.js';
 import { entryFrames } from '../src/core/db.js';
 import { swapLR, LR_GROUPS, NUM_KP } from '../src/core/body25.js';
-import { suggestStanceFrame, detectPitcherSide, canonicalize } from '../src/core/sequence.js';
+import { suggestStanceFrame, detectPitcherSide, canonicalize, estimateSlowMotion } from '../src/core/sequence.js';
 import { detectPhases } from '../src/core/phases.js';
 
 const cases = [];
@@ -29,11 +29,18 @@ cases.push({
   }),
 });
 
+// Tilted camera (exercises the ground-line leveling) and slow motion.
+const tilted = renderSwing(makeSpec({ idle: 0.03 }), { fps: 30, preRoll: 1, postRoll: 0.5, noisePx: 1, camera: { roll: 6 }, seed: 21 });
+cases.push({ name: 'tilted-6deg', frames: tilted.frames, fps: tilted.fps });
+const slow = renderSwing(makeSpec({ bats: 'L' }), { fps: 30, speedFactor: 4, preRoll: 0.6, postRoll: 0.4, camera: { roll: -4 }, seed: 22 });
+cases.push({ name: 'lhh-slowmo4-tilted', frames: slow.frames, fps: slow.fps * 4, videoFps: slow.fps });
+
 const out = cases.map((c) => {
   const stance = suggestStanceFrame(c.frames, c.fps);
   const side = detectPitcherSide(c.frames, stance, c.fps);
   const { frames: canon } = canonicalize(c.frames, { pitcherSide: side.side, stanceIndex: stance, fps: c.fps });
   const phases = detectPhases(canon, c.fps, stance);
-  return { name: c.name, fps: c.fps, frames: c.frames, stance, side: side.side, confidence: side.confidence, phases, canon };
+  const slow = estimateSlowMotion(c.frames, c.videoFps ?? c.fps);
+  return { name: c.name, fps: c.fps, videoFps: c.videoFps ?? c.fps, frames: c.frames, stance, side: side.side, confidence: side.confidence, phases, canon, slowPeak: slow.peak, slowFactor: slow.factor };
 });
 process.stdout.write(JSON.stringify(out));

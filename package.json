@@ -10,7 +10,8 @@
     "build": "node scripts/build.mjs",
     "serve": "node scripts/serve.mjs",
     "dev": "node scripts/serve.mjs --root .",
-    "test:py": "python3 -m unittest discover -s tools/tests"
+    "test:py": "python3 -m unittest discover -s tools/tests",
+    "sweep": "node scripts/normalization-sweep.mjs"
   },
   "engines": {
     "node": ">=20"

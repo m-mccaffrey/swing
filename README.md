@@ -49,8 +49,19 @@ If you use "Deploy from a branch" instead, the app still works. It loads MediaPi
 
 Lengths are measured in torso lengths and shown in inches using the height you enter. Pro values are shown scaled to your size.
 
+### Accuracy: the normalization sweep
+
+`docs/normalization-sweep.md` (regenerate with `npm run sweep`) renders the *same* swing under 44 recording conditions (plus 4 deliberate swing changes) and checks that the comparison still says "identical". Conditions include framing, 480p to 4K, portrait, filmed from behind, left-handers, 1.5–2.0 m hitters, child proportions, 24–240 fps, 4×/8× slow motion, long lead-ins, stance picked early or late, keypoint jitter, dropouts, label flicker, camera tilt, off-axis and perspective cameras, a different pose model, and pros recorded differently. It also checks that real differences (longer stride, lower hands, slower swing, less hip turn) are caught by the right check and nothing else. The same conditions run as tests on every push.
+
+Built-in corrections the sweep relies on:
+- Camera tilt is leveled from the ground line under the feet.
+- The pro is rescaled to the hitter's limb proportions.
+- Slow motion that wasn't set is detected from hand speed. The app offers a one-click fix; the Python tool prints a warning.
+- Contact timing is robust to keypoint jitter.
+
 ### Limitations
 
+- Keep the camera within about 10° of perpendicular to the pitch path. Further off-axis (the sweep tests 25°), the 2D picture changes in ways one camera can't undo.
 - A single side camera sees the swing in 2D. Rotation and joint angles are *apparent* values in the camera plane. They are most meaningful when you compare against pros filmed from the same kind of view.
 - MediaPipe and OpenPose place some keypoints slightly differently (for example the hips and the neck). For the most consistent comparisons, build pro entries with the in-app builder, which uses the same pose model as user swings.
 - The feedback is a comparison with one pro, not an absolute grade. Different good hitters do things differently. Use the ranking to pick a comparison that suits you.

@@ -125,6 +125,36 @@ export function retarget(frame, lengths) {
 }
 
 /**
+ * Per-bone length ratios that give `fromPose` the proportions of `toPose`
+ * (both measured at the stance). Clamped so a bad detection can't explode.
+ */
+export function proportionScales(fromPose, toPose) {
+  const a = boneLengths(fromPose);
+  const b = boneLengths(toPose);
+  const out = {};
+  for (const k of Object.keys(a)) if (b[k] && a[k] > 1e-6) out[k] = Math.min(2, Math.max(0.5, b[k] / a[k]));
+  return out;
+}
+
+/**
+ * Scale every bone of a frame by a per-bone factor, keeping its direction and
+ * its *current* length otherwise. Unlike retarget() this preserves the
+ * foreshortening that shows rotation (hips and shoulders narrowing as they
+ * turn), so it is safe to apply to every frame of a swing.
+ */
+export function rescaleBones(frame, scales) {
+  if (!scales || !(frame[KP.MidHip * 3 + 2] > 0.05)) return frame;
+  const out = frame.slice();
+  for (const [c, p] of BONES) {
+    if (!(frame[c * 3 + 2] > 0.05) || !(frame[p * 3 + 2] > 0.05) || !(out[p * 3 + 2] > 0.05)) continue;
+    const k = scales[c] ?? 1;
+    out[c * 3] = out[p * 3] + (frame[c * 3] - frame[p * 3]) * k;
+    out[c * 3 + 1] = out[p * 3 + 1] + (frame[c * 3 + 1] - frame[p * 3 + 1]) * k;
+  }
+  return out;
+}
+
+/**
  * Rank pros by stance similarity.
  * @param {number[]} userPose from stancePose()
  * @param {{id:string, stancePose:number[]}[]} pros
@@ -133,7 +163,7 @@ export function rankStances(userPose, pros) {
   return pros
     .map((pro) => {
       // Compare shapes, not proportions: give the pro the user's bone lengths.
-      const { distance, perJoint } = poseDistance(userPose, retarget(pro.stancePose, boneLengths(userPose)));
+      const { distance, perJoint } = poseDistance(userPose, rescaleBones(pro.stancePose, proportionScales(pro.stancePose, userPose)));
       return { pro, distance, similarity: similarityFromDistance(distance), perJoint };
     })
     .sort((a, b) => a.distance - b.distance);

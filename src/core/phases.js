@@ -53,9 +53,28 @@ export function findFootPlant(series, lo, hi, stance, contact) {
   return -1;
 }
 
-/** Contact: peak horizontal hand speed toward the pitcher. */
+/**
+ * Contact: peak horizontal hand speed toward the pitcher. Uses the centroid of
+ * the peak (frames above 80% of it, weighted by how far above) rather than the
+ * single fastest frame, which keypoint jitter can move by a frame or two.
+ */
 export function findContact(series, lo, hi) {
-  return argMax(series.handVx, lo, hi + 1);
+  const v = series.handVx;
+  const peak = argMax(v, lo, hi + 1);
+  if (peak < 0) return peak;
+  const thr = 0.8 * v[peak];
+  let a = peak;
+  let b = peak;
+  while (a - 1 >= Math.max(0, lo) && v[a - 1] >= thr) a--;
+  while (b + 1 <= Math.min(v.length - 1, hi) && v[b + 1] >= thr) b++;
+  let sw = 0;
+  let st = 0;
+  for (let i = a; i <= b; i++) {
+    const w = v[i] - thr;
+    sw += w;
+    st += w * i;
+  }
+  return sw > 0 ? Math.round(st / sw) : peak;
 }
 
 /**

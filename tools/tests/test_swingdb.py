@@ -51,6 +51,9 @@ class ParityWithJavaScript(unittest.TestCase):
                 worst = max(abs(a - b) for fa, fb in zip(canon, c["canon"]) for a, b in zip(fa, fb))
                 self.assertLess(worst, 1e-9)
                 self.assertEqual(analysis.detect_phases(canon, fps, stance), c["phases"])
+                peak, factor = analysis.estimate_slow_motion(frames, c["videoFps"])
+                self.assertAlmostEqual(peak, c["slowPeak"], places=9)
+                self.assertEqual(factor, c["slowFactor"])
 
 
 class Helpers(unittest.TestCase):

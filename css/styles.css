@@ -348,3 +348,6 @@ pre.snippet { background: var(--surface-2); padding: 12px; border-radius: 10px; 
 .saved-name { font-weight: 600; overflow-wrap: break-word; font-size: 0.92rem; }
 .saved-meta { font-size: 0.78rem; color: var(--text-secondary); }
 .saved-actions { display: flex; flex-direction: column; gap: 4px; }
+
+.slowmo-note { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 12px; font-size: 0.9rem; }
+.slowmo-note span { flex: 1 1 240px; }

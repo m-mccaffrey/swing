@@ -32,16 +32,39 @@ function jointAngle(f, a, b, c) {
 }
 
 /** Reference values taken from the stance frame of the same sequence. */
-export function stanceContext(frames, stanceIndex) {
-  const f = frames[stanceIndex];
-  const fh = P(f, C.fHip);
-  const bh = P(f, C.bHip);
-  const fs = P(f, C.fShoulder);
-  const bs = P(f, C.bShoulder);
+/**
+ * Half-width (frames) of the window averaged for stance values: the stance is
+ * still, so averaging ±60 ms beats single-frame keypoint noise.
+ */
+export function stanceHalfWindow(fps) {
+  return Math.max(0, Math.round(0.06 * fps));
+}
+
+export function stanceContext(frames, stanceIndex, halfWindow = 0) {
+  const lo = Math.max(0, stanceIndex - halfWindow);
+  const hi = Math.min(frames.length - 1, stanceIndex + halfWindow);
+  const avgOf = (fn) => {
+    let sx = 0;
+    let sy = 0;
+    let n = 0;
+    for (let i = lo; i <= hi; i++) {
+      const p = fn(frames[i]);
+      if (p) {
+        sx += p[0];
+        sy += p[1];
+        n++;
+      }
+    }
+    return n ? [sx / n, sy / n] : null;
+  };
+  const fh = avgOf((f) => P(f, C.fHip));
+  const bh = avgOf((f) => P(f, C.bHip));
+  const fs = avgOf((f) => P(f, C.fShoulder));
+  const bs = avgOf((f) => P(f, C.bShoulder));
   return {
-    nose: P(f, C.nose) || P(f, C.neck) || [0, 1],
-    fAnkle: P(f, C.fAnkle) || [0.4, -1.6],
-    hands: hands(f) || [0, 1],
+    nose: avgOf((f) => P(f, C.nose) || P(f, C.neck)) || [0, 1],
+    fAnkle: avgOf((f) => P(f, C.fAnkle)) || [0.4, -1.6],
+    hands: avgOf(hands) || [0, 1],
     hipW: fh && bh ? fh[0] - bh[0] : NaN,
     shW: fs && bs ? fs[0] - bs[0] : NaN,
   };
@@ -131,7 +154,7 @@ export function frameMetrics(f, ctx) {
  * (hand speed and horizontal hand velocity, both TL/s).
  */
 export function computeSeries(frames, stanceIndex, fps) {
-  const ctx = stanceContext(frames, stanceIndex);
+  const ctx = stanceContext(frames, stanceIndex, stanceHalfWindow(fps));
   const per = frames.map((f) => frameMetrics(f, ctx));
   const series = {};
   for (const key of Object.keys(METRICS)) series[key] = per.map((m) => m[key]);

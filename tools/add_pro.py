@@ -27,7 +27,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from swingdb.analysis import PHASE_KEYS, auto_detect  # noqa: E402
+from swingdb.analysis import PHASE_KEYS, auto_detect, estimate_slow_motion  # noqa: E402
 from swingdb.body25 import detection_coverage, track_hitter  # noqa: E402
 from swingdb.entry import make_entry, slugify, write_entry  # noqa: E402
 from swingdb.video import parse_time  # noqa: E402
@@ -156,6 +156,13 @@ def main(argv=None):
         if coverage < 0.5:
             print(f"  warning: the hitter was found in only {coverage:.0%} of frames. "
                   "Try --target-x, a tighter time range, or a clearer side-view clip.")
+
+        if args.speed == 1:
+            peak, factor = estimate_slow_motion(frames, fps)
+            if factor > 1:
+                print(f"  warning: this clip looks like about {factor}x slow motion (peak hand speed {peak:.1f} "
+                      f"torso-lengths/s; real-time swings reach 5+). Timing in the entry will be wrong.\n"
+                      f"           Re-run with --speed {factor} (that also makes the analysis ~{factor}x faster).")
 
         # 3. Pitcher side, stance, phases.
         stance = None if args.stance is None else max(0, min(len(frames) - 1, round(args.stance * fps)))

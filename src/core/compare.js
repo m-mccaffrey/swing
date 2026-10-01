@@ -3,10 +3,10 @@
 
 import { KP, C, NUM_KP } from './body25.js';
 import { canonicalize, resampleFrames } from './sequence.js';
-import { computeSeries } from './metrics.js';
+import { computeSeries, stanceHalfWindow } from './metrics.js';
 import { detectPhases, sanitizePhases, refinePhases, PHASE_KEYS } from './phases.js';
 import { dtw, pathMaps } from './dtw.js';
-import { stancePose, poseDistance, similarityFromDistance } from './match.js';
+import { stancePose, poseDistance, similarityFromDistance, proportionScales, rescaleBones } from './match.js';
 
 /** Real-time frame rate both swings are resampled to before alignment. */
 export const ALIGN_FPS = 60;
@@ -39,7 +39,7 @@ export function prepareSwing({ frames, fps, speedFactor = 1, stanceIndex, pitche
     series,
     phases: phases ? sanitizePhases({ ...phases, stance: stanceIndex }, canon.length) : detected,
     detectedPhases: detected,
-    stancePose: stancePose(canon, stanceIndex),
+    stancePose: stancePose(canon, stanceIndex, stanceHalfWindow(realFps)),
   };
 }
 
@@ -145,7 +145,10 @@ function groupPoint(f, g) {
  */
 export function compareSwing(user, pro) {
   const proEnd = Math.min(pro.canon.length - 1, pro.phases.finish + Math.round(0.1 * pro.realFps));
-  const P = resampleFrames(pro.canon, pro.realFps, ALIGN_FPS, pro.stanceIndex, proEnd);
+  // Give the pro the user's limb proportions so body shape, not build, is compared.
+  const scales = proportionScales(pro.stancePose, user.stancePose);
+  const proFit = pro.canon.map((f) => rescaleBones(f, scales));
+  const P = resampleFrames(proFit, pro.realFps, ALIGN_FPS, pro.stanceIndex, proEnd);
   const U = resampleFrames(user.canon, user.realFps, ALIGN_FPS, user.stanceIndex, user.canon.length - 1);
   const fp = alignFeatures(P.frames, ALIGN_FPS);
   const fu = alignFeatures(U.frames, ALIGN_FPS);
@@ -234,6 +237,7 @@ export function compareSwing(user, pro) {
   return {
     phases,
     alignedPhases,
+    proScales: scales,
     segments,
     swingScore: ss / ws,
     alignCost: cost,

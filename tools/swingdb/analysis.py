@@ -274,6 +274,23 @@ def motion_energy(frames, fps):
     return [mean([s[i] for s in per if isfin(s[i])]) for i in range(len(frames))]
 
 
+SLOWMO_SPEED_LIMIT = 3
+TYPICAL_HAND_SPEED = 8
+
+
+def estimate_slow_motion(frames, fps):
+    """(peak, factor): factor 1 = looks real time, else a power of two.
+    Mirrors estimateSlowMotion() in sequence.js."""
+    peak = 0.0
+    for v in hand_speed_series(frames, fps):
+        if isfin(v) and v > peak:
+            peak = v
+    if not (peak > 0) or peak >= SLOWMO_SPEED_LIMIT:
+        return peak, 1
+    factor = clamp(2 ** jsround(math.log2(TYPICAL_HAND_SPEED / peak)), 2, 16)
+    return peak, int(factor)
+
+
 def suggest_stance_frame(frames, fps):
     """End of the last quiet period before the fastest hand movement."""
     n = len(frames)
@@ -356,6 +373,56 @@ def detect_pitcher_side(frames, stance_index, fps):
     return ("right" if score >= 0 else "left"), min(1.0, abs(score)), votes
 
 
+MAX_ROLL = 12 * math.pi / 180
+MIN_ROLL = 1 * math.pi / 180
+
+
+def estimate_roll(frames, stance_index, fps=30):
+    """Camera roll (radians) from the ground line through both feet at the
+    stance (big toes, else ankles). 0 when unsure. Mirrors estimateRoll()."""
+    n = len(frames)
+    s = clamp(stance_index, 0, n - 1)
+    tl = torso_length(frames, s)
+    if not isfin(tl):
+        return 0.0
+
+    hw = max(2, jsround(0.15 * fps))
+
+    def line_angles(a, b):
+        out = []
+        for i in range(max(0, s - hw), min(n - 1, s + hw) + 1):
+            p, q = _pt(frames[i], a), _pt(frames[i], b)
+            if not p or not q:
+                continue
+            l, r = (p, q) if p[0] <= q[0] else (q, p)
+            if r[0] - l[0] < 0.5 * tl:
+                continue
+            out.append(math.atan2(r[1] - l[1], r[0] - l[0]))
+        return out
+
+    angles = line_angles(KP["LBigToe"], KP["RBigToe"])
+    if len(angles) < 3:
+        angles = line_angles(KP["LAnkle"], KP["RAnkle"])
+    m = median(angles)
+    if not isfin(m) or abs(m) < MIN_ROLL or abs(m) > MAX_ROLL:
+        return 0.0
+    return m
+
+
+def _rotate_frames(frames, angle, cx, cy):
+    c, sn = math.cos(angle), math.sin(angle)
+    out = []
+    for f in frames:
+        g = list(f)
+        for j in range(NUM_KP):
+            if g[j * 3 + 2] > 0:
+                dx, dy = f[j * 3] - cx, f[j * 3 + 1] - cy
+                g[j * 3] = cx + dx * c - dy * sn
+                g[j * 3 + 1] = cy + dx * sn + dy * c
+        out.append(g)
+    return out
+
+
 def canonicalize(raw_frames, pitcher_side="right", stance_index=0, fps=30, clean=True):
     """Canonical frames (pitcher toward +x, y up, front side = L joints,
     origin = stance MidHip, unit ≈ adult torso length). Mirrors canonicalize()."""
@@ -371,10 +438,20 @@ def canonicalize(raw_frames, pitcher_side="right", stance_index=0, fps=30, clean
             g[j * 3] = sx * f[j * 3]
         frames.append(g)
 
-    win = frames[max(0, s - 2):min(n - 1, s + 2) + 1]
-
     def x_of(f, j):
         return f[j * 3] if f[j * 3 + 2] > MIN_CONF else NAN
+
+    # Level a tilted camera using the ground line at the stance.
+    roll = estimate_roll(frames, s, fps)
+    if roll:
+        win0 = frames[max(0, s - 2):min(n, s + 3)]
+        cx = median([x_of(f, KP["MidHip"]) for f in win0])
+        cy = median([f[KP["MidHip"] * 3 + 1] if f[KP["MidHip"] * 3 + 2] > MIN_CONF else NAN for f in win0])
+        if not (isfin(cx) and isfin(cy)):
+            cx = cy = 0.0
+        frames = _rotate_frames(frames, -roll, cx, cy)
+
+    win = frames[max(0, s - 2):min(n - 1, s + 2) + 1]
 
     def side_score(pairs):
         score = 0.0
@@ -438,9 +515,22 @@ def _hands(f):
     return pa or pb
 
 
+def stance_half_window(fps):
+    return max(0, jsround(0.06 * fps))
+
+
 def compute_series(frames, stance_index, fps):
     """The subset of computeSeries() that phase detection uses."""
-    fa0 = _P(frames[stance_index], KP["LAnkle"]) or (0.4, -1.6)
+    hw = stance_half_window(fps)
+    sx = sy = 0.0
+    cnt = 0
+    for i in range(max(0, stance_index - hw), min(len(frames) - 1, stance_index + hw) + 1):
+        p = _P(frames[i], KP["LAnkle"])
+        if p:
+            sx += p[0]
+            sy += p[1]
+            cnt += 1
+    fa0 = (sx / cnt, sy / cnt) if cnt else (0.4, -1.6)
     S = {"handsX": [], "handsY": [], "handReach": [], "stride": [], "frontFootLift": []}
     for f in frames:
         h = _hands(f)
@@ -496,7 +586,23 @@ def find_foot_plant(S, lo, hi, stance, contact):
 
 
 def find_contact(S, lo, hi):
-    return arg_max(S["handVx"], lo, hi + 1)
+    """Centroid of the peak hand speed toward the pitcher (see findContact())."""
+    v = S["handVx"]
+    peak = arg_max(v, lo, hi + 1)
+    if peak < 0:
+        return peak
+    thr = 0.8 * v[peak]
+    a = b = peak
+    while a - 1 >= max(0, lo) and isfin(v[a - 1]) and v[a - 1] >= thr:
+        a -= 1
+    while b + 1 <= min(len(v) - 1, hi) and isfin(v[b + 1]) and v[b + 1] >= thr:
+        b += 1
+    sw = st = 0.0
+    for i in range(a, b + 1):
+        w = v[i] - thr
+        sw += w
+        st += w * i
+    return jsround(st / sw) if sw > 0 else peak
 
 
 def detect_phases(frames, fps, stance_index=0):

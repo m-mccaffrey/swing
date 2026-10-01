@@ -2,7 +2,7 @@
 // pro at corresponding phases and turn the differences into plain-language
 // notes with a severity and a drill/tip.
 
-import { valueAt, maxIn } from './metrics.js';
+import { valueAt, maxIn, stanceHalfWindow } from './metrics.js';
 import { phaseLabel } from './phases.js';
 import { C } from './body25.js';
 import { argMax } from './math.js';
@@ -11,7 +11,8 @@ import { argMax } from './math.js';
 export const TORSO_TO_HEIGHT = 0.28;
 
 function at(S, key, phase) {
-  const r = Math.max(0, Math.round(S.realFps / 60));
+  let r = Math.max(0, Math.round(S.realFps / 60));
+  if (phase === 'stance') r = Math.max(r, stanceHalfWindow(S.realFps));
   return valueAt(S.series[key], S.phases[phase], r);
 }
 
