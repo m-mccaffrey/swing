@@ -11,8 +11,9 @@ import { demoUserSwing } from './core/synth.js';
 import { NUM_KP } from './core/body25.js';
 import { getLandmarker, analyzeVideo, estimateVideoFps } from './pose/detector.js';
 import { Stage, FramePlayer } from './ui/stage.js';
-import { drawSkeleton, drawScene, canonicalBounds, fitCanvas, cssVar } from './ui/draw.js';
+import { drawSkeleton, drawScene, canonicalBounds, fitCanvas, cssVar, drawHighlights } from './ui/draw.js';
 import { lineChart } from './ui/charts.js';
+import * as library from './ui/library.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -32,6 +33,10 @@ const state = {
   pro: null,
   comparison: null,
   items: [],
+  evidence: null, // feedback item whose evidence is on screen
+  file: null, // the uploaded File (saved with the swing)
+  swingId: null, // id of the saved swing being shown
+  thumbPending: false,
   abort: null,
 };
 
@@ -89,6 +94,10 @@ function download(name, data) {
   }, 1000);
 }
 
+function stageLabel() {
+  return state.isDemo ? 'Demo swing (keypoints only, no video)' : 'Saved swing (video not stored, keypoints only)';
+}
+
 function fmtTime(t) {
   return `${t.toFixed(2)} s`;
 }
@@ -119,6 +128,7 @@ function resetFlow() {
   for (const id of ['step-clip', 'step-progress', 'step-stance', 'results']) show(id, false);
   show('step-upload');
   showError('');
+  renderSavedList();
 }
 
 async function onFile(file) {
@@ -130,6 +140,8 @@ async function onFile(file) {
   resetFlow();
   if (state.videoUrl) URL.revokeObjectURL(state.videoUrl);
   state.isDemo = false;
+  state.file = file;
+  state.swingId = null;
   state.videoUrl = URL.createObjectURL(file);
   const video = document.createElement('video');
   video.preload = 'auto';
@@ -219,6 +231,7 @@ async function runAnalysis() {
       },
     });
     state.analysis = { ...res, speedFactor: speedFactor() };
+    saveNewSwing({ start, end, quality });
     afterAnalysis();
   } catch (e) {
     if (e.name === 'AbortError') {
@@ -241,6 +254,7 @@ function runDemo() {
   resetFlow();
   const d = demoUserSwing();
   state.isDemo = true;
+  state.swingId = null;
   state.video = null;
   $('set-speed').value = '1';
   $('set-ft').value = '5';
@@ -252,7 +266,7 @@ function runDemo() {
 
 // ---------------------------------------------------------------- step 3: stance
 
-function afterAnalysis() {
+function afterAnalysis(saved = null) {
   const a = state.analysis;
   show('step-progress', false);
   const coverage = detectionCoverage(a.frames);
@@ -263,9 +277,9 @@ function afterAnalysis() {
   }
   const realFps = a.fps * a.speedFactor;
   state.suggestedStance = suggestStanceFrame(a.frames, realFps);
-  state.stanceIndex = state.suggestedStance;
+  state.stanceIndex = saved?.stanceIndex ?? state.suggestedStance;
   state.sideDetect = detectPitcherSide(a.frames, state.stanceIndex, realFps);
-  state.pitcherSide = state.sideDetect.side;
+  state.pitcherSide = saved?.pitcherSide ?? state.sideDetect.side;
   document.querySelector(`#pitcher-side input[value="${state.pitcherSide}"]`).checked = true;
   const conf = Math.round(state.sideDetect.confidence * 100);
   $('pitcher-hint').textContent = `Auto-detected from your head turn, hand position, stride and swing direction (${conf}% confident). Change it if it is wrong.`;
@@ -276,7 +290,7 @@ function afterAnalysis() {
   } else note.hidden = true;
 
   stages.stance?.destroy();
-  stages.stance = new Stage($('stance-stage'), { video: state.video, width: a.width, height: a.height, label: 'Demo swing (keypoints only, no video)' });
+  stages.stance = new Stage($('stance-stage'), { video: state.video, width: a.width, height: a.height, label: stageLabel() });
   const slider = $('stance-slider');
   slider.max = String(a.frames.length - 1);
   slider.value = String(state.stanceIndex);
@@ -306,6 +320,11 @@ async function showStanceFrame(i) {
   }
   if (state.stanceIndex !== i) return;
   stages.stance.draw((ctx, map, u) => drawSkeleton(ctx, a.frames[i], { map, lineWidth: 3 * u, radius: 3 * u, outline: 'rgba(0,0,0,0.45)' }));
+  if (state.thumbPending && state.swingId && state.video) {
+    state.thumbPending = false;
+    const thumb = library.thumbnail(state.video);
+    if (thumb) library.updateSwing(state.swingId, { thumb }).then(renderSavedList).catch(() => {});
+  }
 }
 
 // ---------------------------------------------------------------- compare
@@ -329,6 +348,9 @@ function compare() {
     return;
   }
   showError('');
+  if (state.swingId) {
+    library.updateSwing(state.swingId, { stanceIndex: state.stanceIndex, pitcherSide: state.pitcherSide, height: heightInches() }).catch(() => {});
+  }
   state.userBones = null;
   state.ranking = rankStances(state.user.stancePose, state.pros);
   // The video element moves into the results player, so the stance step closes.
@@ -343,7 +365,7 @@ function reopenStance() {
   show('results', false);
   const a = state.analysis;
   stages.stance?.destroy();
-  stages.stance = new Stage($('stance-stage'), { video: state.video, width: a.width, height: a.height, label: 'Demo swing (keypoints only, no video)' });
+  stages.stance = new Stage($('stance-stage'), { video: state.video, width: a.width, height: a.height, label: stageLabel() });
   show('step-stance');
   scrollTo('step-stance');
   showStanceFrame(state.stanceIndex);
@@ -356,6 +378,8 @@ function fitPro(f) {
 }
 
 function selectPro(pro) {
+  state.evidence = null;
+  $('evidence-note').hidden = true;
   state.pro = pro;
   state.proFitted = null;
   state.comparison = compareSwing(state.user, pro.prep);
@@ -435,8 +459,11 @@ function valuesText(it) {
 const SEV_LABEL = { good: 'Matches', minor: 'Minor', major: 'Work on' };
 
 function feedbackRow(it) {
-  const row = document.createElement('div');
+  const row = document.createElement('button');
+  row.type = 'button';
   row.className = 'fb';
+  row.title = 'Show the frames this was measured on';
+  row.addEventListener('click', () => showEvidence(it, row));
   const sev = document.createElement('span');
   sev.className = `sev ${it.severity}`;
   sev.textContent = SEV_LABEL[it.severity];
@@ -448,11 +475,15 @@ function feedbackRow(it) {
   vals.textContent = `${it.label}: ${valuesText(it)}`;
   row.append(sev, msg, vals);
   if (it.tip) {
-    const tip = document.createElement('p');
+    const tip = document.createElement('span');
     tip.className = 'fb-tip';
     tip.textContent = it.tip;
     row.appendChild(tip);
   }
+  const look = document.createElement('span');
+  look.className = 'fb-look';
+  look.textContent = 'Show frames →';
+  row.appendChild(look);
   return row;
 }
 
@@ -490,7 +521,12 @@ function renderFeedback() {
     const sev = document.createElement('span');
     sev.className = `sev ${it.severity}`;
     sev.textContent = SEV_LABEL[it.severity];
-    card.append(ph, h, sev, v, tip);
+    const look = document.createElement('button');
+    look.type = 'button';
+    look.className = 'btn ghost small-btn';
+    look.textContent = 'Show me the frames';
+    look.addEventListener('click', () => showEvidence(it, look));
+    card.append(ph, h, sev, v, tip, look);
     pr.appendChild(card);
   });
 
@@ -502,7 +538,13 @@ function renderFeedback() {
     const ul = document.createElement('ul');
     for (const it of strengths.slice(0, 10)) {
       const li = document.createElement('li');
-      li.textContent = `✓ ${it.label}`;
+      const pill = document.createElement('button');
+      pill.type = 'button';
+      pill.className = 'pill';
+      pill.textContent = `✓ ${it.label}`;
+      pill.title = 'Show the frames this was measured on';
+      pill.addEventListener('click', () => showEvidence(it, pill));
+      li.appendChild(pill);
       ul.appendChild(li);
     }
     st.append(h, ul);
@@ -565,10 +607,18 @@ function renderTimeline() {
   marks.textContent = '';
   const chips = $('phase-chips');
   chips.textContent = '';
+  let lastPct = -100;
+  let lastLow = false;
   for (const ph of PHASES) {
     const i = state.comparison.phases[ph.key];
     const m = document.createElement('span');
-    m.style.left = `${(i / Math.max(1, n - 1)) * 100}%`;
+    const pct = (i / Math.max(1, n - 1)) * 100;
+    // Stagger labels that would overlap the previous one.
+    const low = pct - lastPct < 9 && !lastLow;
+    if (low) m.classList.add('low');
+    lastPct = pct;
+    lastLow = low;
+    m.style.left = `${pct}%`;
     m.textContent = ph.key === 'footPlant' ? 'Plant' : ph.label;
     marks.appendChild(m);
     const chip = document.createElement('button');
@@ -576,7 +626,10 @@ function renderTimeline() {
     chip.className = 'chip';
     chip.dataset.phase = ph.key;
     chip.textContent = `${ph.label} · ${fmtTime(a.times[i])}`;
-    chip.addEventListener('click', () => player.seek(i));
+    chip.addEventListener('click', () => {
+      clearEvidence();
+      player.seek(i);
+    });
     chips.appendChild(chip);
   }
 }
@@ -595,7 +648,10 @@ function drawResultFrame(i) {
   $('timeline').value = String(i);
   const cur = currentPhase(i);
   for (const chip of $('phase-chips').children) chip.setAttribute('aria-pressed', String(chip.dataset.phase === cur));
-  const j = Math.round(c.userToProOrig(i));
+  // Evidence mode: show exactly the two frames a feedback check compared.
+  const ev = state.evidence?.evidence;
+  const evidenceHere = ev && i === ev.userFrame;
+  const j = evidenceHere ? ev.proFrame : Math.round(c.userToProOrig(i));
   const ghostOn = $('ghost-toggle').checked;
   const toImg = (f) => {
     const g = f.slice();
@@ -607,9 +663,16 @@ function drawResultFrame(i) {
     return g;
   };
   const proColor = cssVar('--series-pro', '#eb6834');
+  const userColor = cssVar('--series-user', '#2a78d6');
+  const showGhost = ghostOn && (i >= user.stanceIndex || evidenceHere);
   stages.result.draw((ctx, map, u) => {
-    if (ghostOn && i >= user.stanceIndex) drawSkeleton(ctx, toImg(fitPro(pro.canon[j])), { map, color: proColor, lineWidth: 3 * u, radius: 0, alpha: 0.85, outline: 'rgba(0,0,0,0.35)' });
+    if (showGhost) drawSkeleton(ctx, toImg(fitPro(pro.canon[j])), { map, color: proColor, lineWidth: 3 * u, radius: 0, alpha: 0.85, outline: 'rgba(0,0,0,0.35)' });
     drawSkeleton(ctx, toImg(user.canon[i]), { map, lineWidth: 3 * u, radius: 3 * u, outline: 'rgba(0,0,0,0.45)' });
+    if (evidenceHere) {
+      const o = { pair: ev.pair, scale: u };
+      if (showGhost) drawHighlights(ctx, map, toImg(fitPro(pro.canon[j])), ev.joints, proColor, { ...o, stanceFrame: ev.fromStance ? toImg(fitPro(pro.canon[ev.proStance])) : null });
+      drawHighlights(ctx, map, toImg(user.canon[i]), ev.joints, userColor, { ...o, stanceFrame: ev.fromStance ? toImg(user.canon[ev.userStance]) : null });
+    }
   });
   const canvas = $('scene-canvas');
   const w = canvas.clientWidth || 480;
@@ -621,21 +684,60 @@ function drawResultFrame(i) {
       pro.canon.slice(pro.stanceIndex, pro.phases.finish + 1),
     ]);
   }
-  drawScene(ctx, w, h, {
+  const proFrame = fitPro(i >= user.stanceIndex || evidenceHere ? pro.canon[j] : pro.canon[pro.stanceIndex]);
+  const smap = drawScene(ctx, w, h, {
     bounds: state.sceneBounds,
     user: user.canon[i],
-    pro: fitPro(i >= user.stanceIndex ? pro.canon[j] : pro.canon[pro.stanceIndex]),
-    userTrail: { frames: user.canon, from: user.stanceIndex, to: c.endUserIndex },
-    proTrail: { frames: (state.proFitted ||= pro.canon.map(fitPro)), from: pro.stanceIndex, to: pro.phases.finish },
-    caption: `${cur ? phaseLabel(cur) : 'Before stance'} · ${fmtTime(a.times[i])}`,
+    pro: proFrame,
+    userTrail: evidenceHere ? null : { frames: user.canon, from: user.stanceIndex, to: c.endUserIndex },
+    proTrail: evidenceHere ? null : { frames: (state.proFitted ||= pro.canon.map(fitPro)), from: pro.stanceIndex, to: pro.phases.finish },
+    caption: evidenceHere
+      ? `${state.evidence.label} · ${phaseLabel(state.evidence.phase)}`
+      : `${cur ? phaseLabel(cur) : 'Before stance'} · ${fmtTime(a.times[i])}`,
   });
+  if (evidenceHere) {
+    const o = { pair: ev.pair };
+    drawHighlights(ctx, smap, proFrame, ev.joints, proColor, { ...o, stanceFrame: ev.fromStance ? fitPro(pro.canon[ev.proStance]) : null });
+    drawHighlights(ctx, smap, user.canon[i], ev.joints, userColor, { ...o, stanceFrame: ev.fromStance ? user.canon[ev.userStance] : null });
+  }
+}
+
+/** Jump the player to the frames a feedback check was measured on. */
+async function showEvidence(it, el) {
+  if (!it.evidence || !player) return;
+  player.pause();
+  state.evidence = it;
+  document.querySelectorAll('.evidence-active').forEach((x) => x.classList.remove('evidence-active'));
+  el?.classList.add('evidence-active');
+  const ev = it.evidence;
+  const a = state.analysis;
+  const pro = state.pro.prep;
+  const proShort = state.pro.name.split(' — ')[0];
+  $('evidence-note').hidden = false;
+  $('evidence-title').textContent = `${it.label} · ${phaseLabel(it.phase)}: ${it.message}`;
+  const how = [
+    `Your frame ${ev.userFrame + 1} (${fmtTime(a.times[ev.userFrame])}) vs ${proShort}’s frame ${ev.proFrame + 1} (${(ev.proFrame / pro.fps).toFixed(2)} s into their clip).`,
+    `${valuesText(it)}.`,
+    `Rings mark the joints measured${ev.fromStance ? '; dashed circles and arrows show how far they moved from the stance.' : ev.pair ? '; the dashed line is the distance or angle measured.' : '.'}`,
+  ];
+  if (it.unit === 'sec') how.push(`Timing runs from ${it.id === 'timing.swing' ? 'foot plant to contact' : 'load to foot plant'}; the frame shown is the end of that span.`);
+  $('evidence-body').textContent = how.join(' ');
+  $('h-swing').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  await player.seek(ev.userFrame);
+}
+
+function clearEvidence() {
+  if (!state.evidence) return;
+  state.evidence = null;
+  $('evidence-note').hidden = true;
+  document.querySelectorAll('.evidence-active').forEach((x) => x.classList.remove('evidence-active'));
 }
 
 function renderPlayer() {
   const a = state.analysis;
   player?.pause();
   stages.result?.destroy();
-  stages.result = new Stage($('result-stage'), { video: state.video, width: a.width, height: a.height, label: 'Demo swing (keypoints only, no video)' });
+  stages.result = new Stage($('result-stage'), { video: state.video, width: a.width, height: a.height, label: stageLabel() });
   $('ghost-caption').hidden = false;
   state.sceneBounds = null;
   player = new FramePlayer({
@@ -690,7 +792,7 @@ function renderCharts() {
   const table = document.createElement('table');
   const thead = document.createElement('thead');
   const hr = document.createElement('tr');
-  for (const h of ['Phase', 'Check', 'You', proShort, 'Difference', 'Status']) {
+  for (const h of ['Phase', 'Check', 'You', proShort, 'Difference', 'Status', '']) {
     const th = document.createElement('th');
     th.textContent = h;
     hr.appendChild(th);
@@ -705,6 +807,15 @@ function renderCharts() {
       td.textContent = v;
       tr.appendChild(td);
     }
+    const td = document.createElement('td');
+    const look = document.createElement('button');
+    look.type = 'button';
+    look.className = 'btn ghost small-btn';
+    look.textContent = 'Show';
+    look.setAttribute('aria-label', `Show frames for ${it.label}`);
+    look.addEventListener('click', () => showEvidence(it, look));
+    td.appendChild(look);
+    tr.appendChild(td);
     tbody.appendChild(tr);
   }
   table.append(thead, tbody);
@@ -759,6 +870,157 @@ function exportReport() {
   });
 }
 
+// ---------------------------------------------------------------- saved swings
+
+async function saveNewSwing({ start, end, quality }) {
+  const a = state.analysis;
+  const id = `swing-${Date.now()}`;
+  const record = {
+    id,
+    name: state.file?.name || 'Swing',
+    createdAt: Date.now(),
+    analysis: a,
+    clip: { start, end },
+    quality,
+    stanceIndex: null,
+    pitcherSide: null,
+    height: heightInches(),
+    thumb: null,
+    hasVideo: false,
+  };
+  try {
+    await library.putSwing(record);
+    state.swingId = id;
+    state.thumbPending = true;
+    library.requestPersistence();
+    if (state.file && (await library.putVideo(id, state.file))) {
+      await library.updateSwing(id, { hasVideo: true, videoSize: state.file.size, videoType: state.file.type });
+    }
+    renderSavedList();
+  } catch (e) {
+    console.warn('Could not save the swing in this browser:', e);
+  }
+}
+
+function fmtDate(ms) {
+  try {
+    return new Date(ms).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  } catch {
+    return '';
+  }
+}
+
+async function renderSavedList() {
+  let list = [];
+  try {
+    list = await library.listSwings();
+  } catch {
+    $('saved-swings').hidden = true;
+    return;
+  }
+  const ul = $('saved-list');
+  ul.textContent = '';
+  $('saved-swings').hidden = !list.length;
+  for (const rec of list) {
+    const li = document.createElement('li');
+    li.className = 'saved-item';
+    const img = document.createElement('img');
+    img.className = 'saved-thumb';
+    img.alt = '';
+    if (rec.thumb) img.src = rec.thumb;
+    const text = document.createElement('div');
+    const name = document.createElement('div');
+    name.className = 'saved-name';
+    name.textContent = rec.name;
+    const meta = document.createElement('div');
+    meta.className = 'saved-meta';
+    const a = rec.analysis || {};
+    const dur = a.times?.length ? a.times[a.times.length - 1] - a.times[0] : 0;
+    meta.textContent = [
+      fmtDate(rec.createdAt),
+      `${dur.toFixed(1)} s`,
+      a.speedFactor > 1 ? `${a.speedFactor}× slow-mo` : '',
+      rec.hasVideo ? 'video saved' : 'poses only',
+      rec.stanceIndex != null ? 'stance picked' : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    text.append(name, meta);
+    const actions = document.createElement('div');
+    actions.className = 'saved-actions';
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'btn primary small-btn';
+    open.textContent = 'Open';
+    open.addEventListener('click', () => openSaved(rec.id));
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'btn ghost small-btn';
+    del.textContent = 'Delete';
+    del.setAttribute('aria-label', `Delete ${rec.name}`);
+    del.addEventListener('click', async () => {
+      if (!confirm(`Delete the saved swing “${rec.name}” from this browser?`)) return;
+      await library.deleteSwing(rec.id).catch(() => {});
+      if (state.swingId === rec.id) state.swingId = null;
+      renderSavedList();
+    });
+    actions.append(open, del);
+    li.append(img, text, actions);
+    ul.appendChild(li);
+  }
+}
+
+async function openSaved(id) {
+  let rec;
+  try {
+    rec = await library.getSwing(id);
+  } catch (e) {
+    showError(`Could not open that swing: ${e.message}`);
+    return;
+  }
+  if (!rec) {
+    renderSavedList();
+    return;
+  }
+  resetFlow();
+  state.isDemo = false;
+  state.file = null;
+  state.swingId = rec.id;
+  state.thumbPending = !rec.thumb;
+  state.analysis = rec.analysis;
+  $('set-speed').value = String(rec.analysis.speedFactor || 1);
+  if (rec.height) {
+    $('set-ft').value = String(Math.floor(rec.height / 12));
+    $('set-in').value = String(rec.height % 12);
+  }
+  if (state.videoUrl) URL.revokeObjectURL(state.videoUrl);
+  state.videoUrl = null;
+  state.video = null;
+  if (rec.hasVideo) {
+    const blob = await library.getVideo(rec.id).catch(() => null);
+    if (blob) {
+      state.videoUrl = URL.createObjectURL(blob);
+      const video = document.createElement('video');
+      video.preload = 'auto';
+      video.muted = true;
+      video.playsInline = true;
+      video.src = state.videoUrl;
+      const ok = await new Promise((resolve) => {
+        video.addEventListener('loadeddata', () => resolve(true), { once: true });
+        video.addEventListener('error', () => resolve(false), { once: true });
+      });
+      if (ok) state.video = video;
+    }
+  }
+  show('step-upload', false);
+  afterAnalysis({ stanceIndex: rec.stanceIndex, pitcherSide: rec.pitcherSide });
+  // Stance already picked last time: go straight to the results.
+  if (rec.stanceIndex != null && !$('step-stance').hidden) {
+    await dbReady;
+    compare();
+  }
+}
+
 // ---------------------------------------------------------------- wiring
 
 function wire() {
@@ -797,13 +1059,21 @@ function wire() {
   $('restance-btn').addEventListener('click', reopenStance);
 
   $('play-btn').addEventListener('click', () => {
+    clearEvidence();
     if (player.playing) player.pause();
     else {
       const from = player.index >= state.comparison.endUserIndex ? state.user.stanceIndex : player.index;
       player.play(Number($('play-rate').value), from, Math.min(state.analysis.frames.length - 1, state.comparison.endUserIndex + 3));
     }
   });
-  $('timeline').addEventListener('input', () => player.seek(Number($('timeline').value)));
+  $('timeline').addEventListener('input', () => {
+    clearEvidence();
+    player.seek(Number($('timeline').value));
+  });
+  $('evidence-clear').addEventListener('click', () => {
+    clearEvidence();
+    drawResultFrame(player.index);
+  });
   $('ghost-toggle').addEventListener('change', () => drawResultFrame(player.index));
   $('export-pose').addEventListener('click', exportPose);
   $('export-report').addEventListener('click', exportReport);
@@ -814,6 +1084,7 @@ function wire() {
   });
   for (const id of ['set-ft', 'set-in']) {
     $(id).addEventListener('change', () => {
+      if (state.swingId) library.updateSwing(state.swingId, { height: heightInches() }).catch(() => {});
       if (state.comparison) {
         renderFeedback();
         renderCharts();
@@ -835,9 +1106,10 @@ function wire() {
 }
 
 wire();
-initDatabase().catch((e) => {
+renderSavedList();
+const dbReady = initDatabase().catch((e) => {
   $('db-status').textContent = `Could not load the pro database: ${e.message}`;
 });
 
 // Exposed for automated checks and debugging.
-window.swingMatch = { state, runDemo, compare };
+window.swingMatch = { state, runDemo, compare, openSaved, renderSavedList };

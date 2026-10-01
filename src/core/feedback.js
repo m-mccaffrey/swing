@@ -4,6 +4,8 @@
 
 import { valueAt, maxIn } from './metrics.js';
 import { phaseLabel } from './phases.js';
+import { C } from './body25.js';
+import { argMax } from './math.js';
 
 /** Average adult ratio of Neck→MidHip (2D, side view) to standing height. */
 export const TORSO_TO_HEIGHT = 0.28;
@@ -289,6 +291,64 @@ export const RULES = [
   },
 ];
 
+/**
+ * What each check measured, so the app can show the evidence: the joints
+ * involved, whether the value is a movement from the stance (draw the stance
+ * position too), whether it's the distance between a pair of joints, and the
+ * frame it was read at when that isn't simply the phase frame.
+ */
+const HANDS = [C.fWrist, C.bWrist];
+const ANKLES = [C.fAnkle, C.bAnkle];
+export const EVIDENCE = {
+  'stance.width': { joints: ANKLES, pair: true },
+  'stance.posture': { joints: [C.nose, ...ANKLES] },
+  'stance.weight': { joints: [C.midHip, ...ANKLES] },
+  'stance.handsHeight': { joints: [...HANDS, C.neck] },
+  'stance.handsDepth': { joints: [...HANDS, C.bShoulder] },
+  'stance.backElbow': { joints: [C.bElbow, C.bShoulder], pair: true },
+  'stance.tilt': { joints: [C.neck, C.midHip], pair: true },
+  'load.hands': { joints: HANDS, fromStance: true },
+  'load.weight': { joints: [C.midHip], fromStance: true },
+  'load.legLift': { joints: [C.fAnkle], fromStance: true, frame: (S) => argMax(S.series.frontFootLift, S.phases.stance, S.phases.footPlant + 1) },
+  'plant.stride': { joints: [C.fAnkle], fromStance: true },
+  'plant.head': { joints: [C.nose], fromStance: true },
+  'plant.hands': { joints: [...HANDS, C.bShoulder] },
+  'contact.frontLeg': { joints: [C.fHip, C.fKnee, C.fAnkle] },
+  'contact.head': { joints: [C.nose], fromStance: true },
+  'contact.headDrop': { joints: [C.nose], fromStance: true },
+  'contact.tilt': { joints: [C.neck, C.midHip], pair: true },
+  'contact.hips': { joints: [C.fHip, C.bHip], pair: true },
+  'contact.shoulders': { joints: [C.fShoulder, C.bShoulder], pair: true },
+  'contact.slot': { joints: [C.bElbow, C.bShoulder], pair: true },
+  'contact.point': { joints: [...HANDS, C.fHip] },
+  'contact.handsHeight': { joints: [...HANDS, C.neck] },
+  'contact.shoulderDrop': { joints: [C.fShoulder, C.bShoulder], pair: true },
+  'contact.sequence': { joints: [C.fHip, C.bHip, C.fShoulder, C.bShoulder] },
+  'ext.reach': { joints: [...HANDS, C.neck] },
+  'finish.balance': { joints: [C.nose, ...ANKLES] },
+  'finish.hands': { joints: [...HANDS, C.neck] },
+  'finish.rotation': { joints: [C.fShoulder, C.bShoulder], pair: true },
+  'timing.stride': { joints: [C.fAnkle] },
+  'timing.swing': { joints: HANDS },
+};
+
+function evidenceFor(id, phase, user, pro) {
+  const ev = EVIDENCE[id] || { joints: [] };
+  const frameOf = (S) => {
+    const f = ev.frame ? ev.frame(S) : -1;
+    return f >= 0 ? f : S.phases[phase];
+  };
+  return {
+    joints: ev.joints,
+    pair: !!ev.pair,
+    fromStance: !!ev.fromStance,
+    userFrame: frameOf(user),
+    proFrame: frameOf(pro),
+    userStance: user.phases.stance,
+    proStance: pro.phases.stance,
+  };
+}
+
 /** Sequence check: do the hips lead the shoulders at contact like the pro? */
 function sequenceItem(user, pro, proName) {
   const uh = at(user, 'hipTurn', 'contact');
@@ -319,6 +379,7 @@ function sequenceItem(user, pro, proName) {
     tip: bad || userLead < proLead - 15
       ? 'Power flows hips, then torso, then arms, then bat. Start the swing with the back hip while the front shoulder stays closed (hip-lead drill).'
       : '',
+    evidence: evidenceFor('contact.sequence', 'contact', user, pro),
   };
 }
 
@@ -355,6 +416,7 @@ export function evaluateFeedback(user, pro, { proName, timingKnown = true } = {}
       weight: rule.weight,
       message: fill(severity === 'good' ? rule.good : rule[dir]),
       tip: severity === 'good' ? '' : fill(rule[`${dir}Tip`]),
+      evidence: evidenceFor(rule.id, rule.phase, user, pro),
     });
   }
   const seq = sequenceItem(user, pro, proName);

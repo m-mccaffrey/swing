@@ -70,3 +70,22 @@ test('demo swing: feedback finds the flaws that were built into it', () => {
   assert.equal(s.priorities.length, 3);
   assert.ok(s.strengths.length > 5);
 });
+
+test('every feedback item carries evidence: measured joints and in-range frames', async () => {
+  const { EVIDENCE } = await import('../src/core/feedback.js');
+  const { user } = demoPrep();
+  const pro = proPrep('synthetic-a');
+  const c = compareSwing(user, pro);
+  const items = evaluateFeedback({ ...user, phases: c.phases }, pro, { proName: 'Pro' });
+  for (const it of items) {
+    assert.ok(EVIDENCE[it.id], `no evidence spec for ${it.id}`);
+    const ev = it.evidence;
+    assert.ok(ev.joints.length > 0, it.id);
+    assert.ok(ev.userFrame >= 0 && ev.userFrame < user.canon.length, `${it.id} user frame ${ev.userFrame}`);
+    assert.ok(ev.proFrame >= 0 && ev.proFrame < pro.canon.length, `${it.id} pro frame ${ev.proFrame}`);
+  }
+  // Leg lift is read at the highest point of the front foot, not the load frame.
+  const leg = items.find((i) => i.id === 'load.legLift');
+  const lift = pro.series.frontFootLift;
+  assert.equal(lift[leg.evidence.proFrame], Math.max(...lift.slice(pro.phases.stance, pro.phases.footPlant + 1).filter(Number.isFinite)));
+});

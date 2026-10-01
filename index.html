@@ -51,6 +51,11 @@
           </ul>
         </div>
       </div>
+      <div class="saved" id="saved-swings" hidden>
+        <h3>Your saved swings</h3>
+        <ul class="saved-list" id="saved-list"></ul>
+        <p class="muted small">Every swing you analyze is kept in this browser (poses, your stance pick and, if there is room, the video), so you can reopen it without uploading or analyzing again. Nothing is uploaded anywhere.</p>
+      </div>
     </section>
 
     <!-- Step 1b: clip selection -->
@@ -157,12 +162,20 @@
           </div>
         </div>
         <h3 class="sub-h">Stance details</h3>
+        <p class="muted small">Click any check to see the frames and joints it was measured on.</p>
         <div id="stance-feedback" class="feedback-list"></div>
       </section>
 
       <section class="card" aria-labelledby="h-swing">
         <h2 id="h-swing">Swing comparison</h2>
         <div class="scores" id="scores"></div>
+        <div class="evidence-note" id="evidence-note" hidden role="status">
+          <div>
+            <strong id="evidence-title"></strong>
+            <p id="evidence-body"></p>
+          </div>
+          <button class="btn ghost small-btn" id="evidence-clear" type="button">Back to playback</button>
+        </div>
         <div class="player-grid">
           <figure>
             <div class="stage-wrap" id="result-stage"></div>
@@ -199,6 +212,7 @@
             </span>
           </label>
         </div>
+        <p class="muted small">Click any check to see the exact frames and joints it was measured on, side by side with the pro.</p>
         <div id="priorities" class="priorities"></div>
         <div id="strengths" class="strengths"></div>
         <div id="phase-feedback"></div>

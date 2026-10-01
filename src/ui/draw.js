@@ -186,3 +186,72 @@ export function drawScene(ctx, w, h, { bounds, user, pro, userTrail, proTrail, c
   if (user) drawSkeleton(ctx, user, { map, color: userColor, lineWidth: 4, radius: 3, outline: surface });
   return map;
 }
+
+/**
+ * Evidence overlay: ring the measured joints, join pairs (widths, angles,
+ * heights between two joints) and, for movements measured from the stance,
+ * mark where the joints were at the stance with an arrow to where they are now.
+ */
+export function drawHighlights(ctx, map, frame, joints, color, { pair = false, stanceFrame = null, scale = 1 } = {}) {
+  if (!frame || !joints?.length) return;
+  const ok = (f, j) => f && f[j * 3 + 2] > 0.05;
+  const P = (f, j) => map(f[j * 3], f[j * 3 + 1]);
+  ctx.save();
+  ctx.lineCap = 'round';
+  const surface = 'rgba(255,255,255,0.9)';
+  if (pair) {
+    const pts = joints.filter((j) => ok(frame, j)).map((j) => P(frame, j));
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 3 * scale;
+    ctx.setLineDash([6 * scale, 4 * scale]);
+    ctx.beginPath();
+    pts.forEach(([x, y], k) => (k ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  if (stanceFrame) {
+    for (const j of joints) {
+      if (!ok(frame, j) || !ok(stanceFrame, j)) continue;
+      const [x0, y0] = P(stanceFrame, j);
+      const [x1, y1] = P(frame, j);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2 * scale;
+      ctx.setLineDash([3 * scale, 3 * scale]);
+      ctx.beginPath();
+      ctx.arc(x0, y0, 6 * scale, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      const d = Math.hypot(x1 - x0, y1 - y0);
+      if (d > 10 * scale) {
+        const ux = (x1 - x0) / d;
+        const uy = (y1 - y0) / d;
+        const ex = x1 - ux * 10 * scale;
+        const ey = y1 - uy * 10 * scale;
+        ctx.beginPath();
+        ctx.moveTo(x0 + ux * 6 * scale, y0 + uy * 6 * scale);
+        ctx.lineTo(ex, ey);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(ex, ey);
+        ctx.lineTo(ex - ux * 6 * scale - uy * 4 * scale, ey - uy * 6 * scale + ux * 4 * scale);
+        ctx.lineTo(ex - ux * 6 * scale + uy * 4 * scale, ey - uy * 6 * scale - ux * 4 * scale);
+        ctx.closePath();
+        ctx.fillStyle = color;
+        ctx.fill();
+      }
+    }
+  }
+  for (const j of joints) {
+    if (!ok(frame, j)) continue;
+    const [x, y] = P(frame, j);
+    ctx.lineWidth = 5 * scale;
+    ctx.strokeStyle = surface;
+    ctx.beginPath();
+    ctx.arc(x, y, 9 * scale, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.lineWidth = 2.5 * scale;
+    ctx.strokeStyle = color;
+    ctx.stroke();
+  }
+  ctx.restore();
+}

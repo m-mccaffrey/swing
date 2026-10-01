@@ -7,6 +7,9 @@ Compare your baseball swing to MLB swings, in the browser.
 3. Pick the frame with your **starting stance**. It is matched against every pro stance in the database, and the closest one is your match.
 4. The rest of your swing is aligned with the pro's using dynamic time warping. Load, foot plant, contact, extension and finish are located, and about 30 checks produce phase-by-phase **feedback**: stride, head movement, hand load, front-leg brace, spine tilt, hip and shoulder turn, contact point, extension, finish, and timing.
 
+- **Click any piece of advice** (feedback row, priority card, "matches" pill or table row). The player jumps to the exact pair of frames that check compared, rings the joints it measured, and draws the stance position with an arrow for movements measured from the stance. You can check that every claim is grounded in the poses.
+- **Saved swings:** every analyzed swing is kept in the browser's IndexedDB: poses, stance pick, pitcher side, height and, if there is room, the video. Reopening one goes straight to the results with no upload and no re-analysis.
+
 Videos never leave the device. The site is plain static files (no build step to run it), deployed to GitHub Pages by a workflow.
 
 **Live site:** `https://m-mccaffrey.github.io/swing/` (once Pages is enabled, see below)
