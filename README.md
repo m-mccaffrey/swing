@@ -81,6 +81,8 @@ python tools/add_pro.py "https://www.youtube.com/watch?v=VIDEO_ID" \
 git add data/pros && git commit -m "Add Player Name" && git push
 ```
 
+Prefer a window? Run `python tools/add_pro_gui.py`. It's the same tool with a form: paste the link or pick a file, fill in the player, set the speed and press **Analyze and add to database**. It shows the log and the preview of the six phase frames, and gives you buttons to open the database folder and copy the git commands. It needs Tkinter, which comes with Python from python.org; with Homebrew run `brew install python-tk`, on Debian/Ubuntu `sudo apt install python3-tk`.
+
 What it does:
 
 1. Downloads only that time range, video only (the whole video if ffmpeg isn't installed). It uses H.264 at up to 1080p and the highest frame rate available.
@@ -175,6 +177,7 @@ src/ui/                    canvas drawing, SVG charts, video stage/player
 data/pros/                 pro swing database (index.json + one file per swing)
 scripts/                   build, dev server, OpenPose importer, synthetic generator
 tools/add_pro.py           YouTube/local video → pro database entry (Python)
+tools/add_pro_gui.py       the same, in a window (Tkinter)
 tools/swingdb/             its modules: pose, video, detection (port of the JS), entry writer
 tests/                     unit tests
 ```

@@ -192,6 +192,7 @@ def main(argv=None):
             fps=fps, speed_factor=args.speed, width=width, height=height, pitcher_side=det["pitcherSide"],
             stance_frame=phases["stance"], phases=phases, frames=frames, clip=clip,
         )
+        out = None
         if args.dry_run:
             print("Dry run: database not changed.")
         else:
@@ -204,6 +205,8 @@ def main(argv=None):
             kept = cache / "previews" / f"{entry_id}{Path(path).suffix}"
             os.replace(path, kept)
             print(f"Kept clip: {kept}")
+        return {"entry": out, "preview": preview_path, "id": entry_id, "phases": phases,
+                "pitcherSide": det["pitcherSide"], "fps": fps}
     finally:
         for f in work.glob("*"):
             f.unlink(missing_ok=True)
