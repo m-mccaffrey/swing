@@ -9,7 +9,8 @@
     "gen": "node scripts/generate-synthetic.mjs",
     "build": "node scripts/build.mjs",
     "serve": "node scripts/serve.mjs",
-    "dev": "node scripts/serve.mjs --root ."
+    "dev": "node scripts/serve.mjs --root .",
+    "test:py": "python3 -m unittest discover -s tools/tests"
   },
   "engines": {
     "node": ">=20"

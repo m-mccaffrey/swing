@@ -3,8 +3,9 @@
 // suggestion, and canonicalization into a view-independent coordinate frame.
 //
 // Canonical coordinates:
-//   * x points toward the pitcher, y points up (meters are not known, so the
-//     unit is one "torso length" (TL) = Neck→MidHip distance at the stance).
+//   * x points toward the pitcher, y points up. Meters are not known, so the
+//     unit is a body-proportional "torso length" (TL): (torso + thigh + shin)
+//     at the stance / BODY_TO_TORSO, i.e. about one Neck→MidHip for an adult.
 //   * origin is the MidHip at the stance frame.
 //   * "L*" BODY_25 joints are the FRONT side (closest to the pitcher), "R*"
 //     the BACK side. A left-handed hitter therefore looks like a right-handed

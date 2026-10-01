@@ -54,6 +54,41 @@ Lengths are measured in torso lengths and shown in inches using the height you e
 
 ## Adding pro swings
 
+### From YouTube with the Python tool (recommended)
+
+Run this on your own computer. YouTube often blocks downloads from cloud servers, so a home connection works best.
+
+```sh
+pip install -r tools/requirements.txt      # mediapipe + yt-dlp (Python 3.9+); ffmpeg on PATH recommended
+
+python tools/add_pro.py "https://www.youtube.com/watch?v=VIDEO_ID" \
+    --start 1:02.5 --end 1:06 --name "Player Name" --bats R --team "Team"
+
+git add data/pros && git commit -m "Add Player Name" && git push
+```
+
+What it does:
+
+1. Downloads only that time range, video only (the whole video if ffmpeg isn't installed). It uses H.264 at up to 1080p and the highest frame rate available.
+2. Finds the hitter's pose in every frame with MediaPipe, the same model the web app uses, and converts it to OpenPose BODY_25. If several people are in the frame (catcher, umpire), it locks on to the most prominent one. Pass `--target-x 0.3` to point at the hitter instead: 0 is the left edge of the frame, 1 the right.
+3. Auto-detects the pitcher side, stance and phases. The logic is the same as in the browser; `tools/tests` checks the Python port against the JavaScript.
+4. Writes `data/pros/<id>.json`, adds it to `index.json` and deletes the video. Only keypoints are kept, plus the source URL and timestamps in the entry's `clip` field.
+5. Saves a preview of the six phase frames with the skeleton drawn on to `.cache/previews/<id>.jpg` (not committed). Check it. If a phase is off, load the entry in `builder.html` (**Existing database entry**), fix it, and download the corrected file over the original.
+
+Useful options:
+
+| Option | Use |
+| --- | --- |
+| `--speed 4` | the clip is a 4× slow-motion replay (common on broadcasts) |
+| `--pitcher left` / `--pitcher right` | override the auto-detected pitcher side |
+| `--stance 0.4` | stance moment, in seconds from the clip start |
+| `--file swing.mp4` | use a local video instead of a URL |
+| `--cookies-from-browser chrome` | if YouTube asks you to sign in |
+| `--dry-run` | analyze and make the preview without touching the database |
+| `--model full` | faster, slightly less accurate pose model (default `heavy`) |
+
+Pick clips filmed from the side, perpendicular to the pitch path, with the hitter's whole body in view. Broadcast center-field shots don't work for this.
+
 ### With the in-app builder (`builder.html`)
 
 1. Load an MLB swing video (side view), a folder of OpenPose `--write_json` files, or an existing entry to edit.
@@ -104,6 +139,7 @@ Only add footage you have the rights to use, and record the source in the entry.
 ```sh
 npm ci            # installs @mediapipe/tasks-vision (vendored into the build)
 npm test          # unit tests (node:test)
+npm run test:py   # Python tool tests (stdlib only; checks parity with the JS)
 npm run dev       # serve the repo at http://localhost:8080 (vendor paths mapped to node_modules)
 npm run build     # assemble dist/ (vendors MediaPipe, downloads pose models to .cache/)
 npm run serve     # serve dist/
@@ -122,5 +158,7 @@ src/pose/detector.js       MediaPipe Pose Landmarker wrapper
 src/ui/                    canvas drawing, SVG charts, video stage/player
 data/pros/                 pro swing database (index.json + one file per swing)
 scripts/                   build, dev server, OpenPose importer, synthetic generator
+tools/add_pro.py           YouTube/local video → pro database entry (Python)
+tools/swingdb/             its modules: pose, video, detection (port of the JS), entry writer
 tests/                     unit tests
 ```
