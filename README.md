@@ -79,7 +79,9 @@ Useful options:
 
 | Option | Use |
 | --- | --- |
-| `--speed 4` | the clip is a 4× slow-motion replay (common on broadcasts) |
+| `--speed 4` | the clip is a 4× slow-motion replay (common on YouTube and broadcasts). Fixes timing and also fast-forwards automatically: frames are skipped so analysis runs at about 60 frames per *real* second (a 4× replay at 60 fps → every 4th frame, so 4× faster) |
+| `--ff N` | fast-forward by hand: analyze every Nth frame (`--ff 2` = 2× faster). Overrides the automatic choice; warns if fewer than 30 frames per real second are left |
+| `--max-fps 120` | change the automatic target (frames per real second; default 60) |
 | `--pitcher left` / `--pitcher right` | override the auto-detected pitcher side |
 | `--stance 0.4` | stance moment, in seconds from the clip start |
 | `--file swing.mp4` | use a local video instead of a URL |

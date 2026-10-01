@@ -53,10 +53,14 @@ def parse_args(argv=None):
     p.add_argument("--notes", default="")
     p.add_argument("--pitcher", choices=["left", "right"], help="side of the frame the pitcher is on (default: auto)")
     p.add_argument("--stance", type=float, help="stance time in seconds from the clip start (default: auto)")
-    p.add_argument("--speed", type=float, default=1.0, help="slow-motion factor of the footage (e.g. 4 for a 4x replay)")
+    p.add_argument("--speed", type=float, default=1.0,
+                   help="slow-motion factor of the footage (e.g. 4 for a 4x replay). Also skips frames automatically, see --ff")
+    p.add_argument("--ff", "--fast-forward", type=int, metavar="N",
+                   help="analyze every Nth frame (Nx fast-forward). Default: automatic from --speed so analysis runs at "
+                        "about --max-fps frames per real second, e.g. a 4x replay at 60 fps -> every 4th frame")
     p.add_argument("--target-x", type=float, help="hitter's rough horizontal position (0 = left edge, 1 = right) if several people are in frame")
     p.add_argument("--model", choices=["lite", "full", "heavy"], default="heavy", help="pose model (default: heavy, most accurate)")
-    p.add_argument("--max-fps", type=float, default=60, help="analyze at most this many frames per second (default 60)")
+    p.add_argument("--max-fps", type=float, default=60, help="target frames per second of real time when skipping automatically (default 60)")
     p.add_argument("--cookies-from-browser", help="pass browser cookies to yt-dlp if YouTube asks you to sign in (chrome, firefox, safari, ...)")
     p.add_argument("--keep-video", action="store_true", help="keep the downloaded clip (in .cache/previews/, not committed)")
     p.add_argument("--dry-run", action="store_true", help="analyze and make the preview, but don't write the database")
@@ -119,15 +123,27 @@ def main(argv=None):
             if args.start or args.end:
                 source += f" ({start:.1f}-{end if end is not None else 'end'} s)"
 
-        fps, width, height, native_fps, _ = video.probe(path, args.max_fps)
-        real_fps = fps * args.speed
-        print(f"Video: {width}x{height}, {native_fps:.0f} fps (analyzing {fps:.0f} fps)" + (f", {args.speed:g}x slow motion" if args.speed != 1 else ""))
+        native_fps, width, height, count = video.probe(path)
+        step = video.frame_step(native_fps, args.speed, args.max_fps, args.ff)
+        fps = native_fps / step  # analyzed frames per second of video
+        real_fps = fps * args.speed  # ... per second of real time
+        slow = f", {args.speed:g}x slow motion" if args.speed != 1 else ""
+        print(f"Video: {width}x{height}, {native_fps:.0f} fps{slow}")
+        clip_len = (read_end if read_end is not None else count / native_fps) - read_start
+        frames_est = max(1, int(clip_len * fps))
+        if step > 1:
+            print(f"Fast-forward {step}x: analyzing every {step}{'nd' if step == 2 else 'rd' if step == 3 else 'th'} frame "
+                  f"(~{frames_est} frames, {real_fps:.0f} per real second)")
+        else:
+            print(f"Analyzing every frame (~{frames_est} frames, {real_fps:.0f} per real second)")
+        if real_fps < 30:
+            print(f"  warning: only {real_fps:.0f} frames per real second; fast swings may blur between frames. Try a smaller --ff.")
 
         # 2. Pose in every frame.
         model = pose_mod.ensure_model(args.model, cache / "models")
         extractor = pose_mod.PoseExtractor(model)
         people, t0 = [], time.time()
-        for i, t, frame in video.read_frames(path, read_start, read_end, args.max_fps):
+        for i, t, frame in video.read_frames(path, read_start, read_end, step):
             people.append(extractor.detect(frame, t))
             if i % 15 == 0:
                 print(f"\r  pose: frame {i + 1}", end="", flush=True)
@@ -152,7 +168,7 @@ def main(argv=None):
 
         # 4. Preview of the phase frames.
         images = {}
-        for i, _, frame in video.read_frames(path, read_start, read_end, args.max_fps):
+        for i, _, frame in video.read_frames(path, read_start, read_end, step):
             for k in PHASE_KEYS:
                 if phases[k] == i:
                     images[k] = frame

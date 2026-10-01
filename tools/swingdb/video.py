@@ -87,34 +87,43 @@ def download_clip(url, start, end, workdir, cookies_from_browser=None, max_heigh
     return path, info, start, end
 
 
-def read_frames(path, start=0.0, end=None, max_fps=60, log=print):
-    """Yield (index, time_in_clip, bgr_frame) for frames in [start, end].
+def frame_step(native_fps, speed=1.0, max_real_fps=60.0, ff=None):
+    """How many video frames to advance per analyzed frame.
 
-    Frames are thinned to at most ``max_fps`` (e.g. a 120 fps file is read at
-    60 fps); probe() reports the resulting frame rate.
+    Slow-motion footage has many frames per *real* second (a 4x replay at
+    60 fps = 240 real fps), far more than a swing needs. By default we skip
+    frames so analysis runs at about ``max_real_fps`` of real time. ``ff``
+    ("fast-forward") forces every Nth frame instead.
     """
+    if ff:
+        return max(1, int(ff))
+    real = native_fps * max(speed, 1e-9)
+    return max(1, round(real / max_real_fps)) if max_real_fps else 1
+
+
+def read_frames(path, start=0.0, end=None, step=1):
+    """Yield (index, time_in_clip, bgr_frame) for every ``step``-th frame in
+    [start, end]. Skipped frames are only grabbed, not converted."""
     import cv2
 
     cap = cv2.VideoCapture(str(path))
     if not cap.isOpened():
         raise RuntimeError(f"OpenCV cannot open {path}")
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    step = max(1, round(fps / max_fps)) if max_fps else 1
     if start > 0:
         cap.set(cv2.CAP_PROP_POS_MSEC, start * 1000.0)
     k = 0
     out_i = 0
     try:
-        while True:
-            ok, frame = cap.read()
-            if not ok:
-                break
+        while cap.grab():
             t = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
             if end is not None and t > end + 1e-6:
                 break
             if t + 1e-6 < start:
                 continue
             if k % step == 0:
+                ok, frame = cap.retrieve()
+                if not ok:
+                    break
                 yield out_i, t - start, frame
                 out_i += 1
             k += 1
@@ -122,8 +131,8 @@ def read_frames(path, start=0.0, end=None, max_fps=60, log=print):
         cap.release()
 
 
-def probe(path, max_fps=60):
-    """(effective_fps, width, height, native_fps, frame_count) of a video file."""
+def probe(path):
+    """(native_fps, width, height, frame_count) of a video file."""
     import cv2
 
     cap = cv2.VideoCapture(str(path))
@@ -134,5 +143,4 @@ def probe(path, max_fps=60):
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     cap.release()
-    step = max(1, round(fps / max_fps)) if max_fps else 1
-    return fps / step, w, h, fps, count
+    return fps, w, h, count

@@ -60,6 +60,18 @@ class Helpers(unittest.TestCase):
         self.assertEqual(parse_time("0:01:23.5"), 83.5)
         self.assertIsNone(parse_time(None))
 
+    def test_frame_step(self):
+        from swingdb.video import frame_step
+
+        self.assertEqual(frame_step(60, speed=1), 1)  # real-time 60 fps: every frame
+        self.assertEqual(frame_step(30, speed=1), 1)
+        self.assertEqual(frame_step(60, speed=4), 4)  # 4x replay at 60 fps = 240 real fps
+        self.assertEqual(frame_step(30, speed=8), 4)  # 8x at 30 fps = 240 real fps
+        self.assertEqual(frame_step(30, speed=2), 1)
+        self.assertEqual(frame_step(120, speed=1), 2)  # 120 fps real time
+        self.assertEqual(frame_step(60, speed=4, ff=2), 2)  # explicit fast-forward wins
+        self.assertEqual(frame_step(60, speed=4, max_real_fps=120), 2)
+
     def test_jsround(self):
         self.assertEqual(analysis.jsround(2.5), 3)
         self.assertEqual(analysis.jsround(-2.5), -2)
