@@ -41,11 +41,16 @@ for (const r of results.filter((r) => r.kind === 'sensitive')) {
   });
 }
 
-test('limits are detected or documented: ignored slow motion is at least spotted', () => {
-  const r = results.find((r) => r.name.includes('suggestion ignored'));
-  assert.equal(r.res.slowmoSuggested, 4);
+test('the 25° off-axis camera is a documented limit', () => {
   const yaw = results.find((r) => r.name.includes('25° off'));
   assert.ok(yaw.res.swingScore < 95, 'expected the 25° off-axis camera to degrade (documented limit)');
+});
+
+test('swing clock: slow motion and frame rate are measured, tempo is normalized', () => {
+  const near = (r, want, tol) => assert.ok(Math.abs(r.res.clockRatio - want) <= tol, `${r.name}: clock ratio ${r.res.clockRatio.toFixed(3)}, want ${want}`);
+  for (const r of results.filter((r) => /slow motion|fps|frame budget/.test(r.name) && r.kind === 'invariant' && !r.proCase)) near(r, 1, 0.05);
+  near(results.find((r) => r.name.includes('25% slower')), 1.25, 0.05);
+  near(results.find((r) => r.name.includes('20% quicker')), 0.8, 0.05);
 });
 
 test('keypoint jitter: false alarms stay rare across noise seeds', () => {

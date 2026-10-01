@@ -1,6 +1,7 @@
 """Get a swing clip from YouTube (yt-dlp) or a local file and read its frames
 (OpenCV). Heavy imports happen inside the functions."""
 
+import math
 import shutil
 from pathlib import Path
 
@@ -87,18 +88,13 @@ def download_clip(url, start, end, workdir, cookies_from_browser=None, max_heigh
     return path, info, start, end
 
 
-def frame_step(native_fps, speed=1.0, max_real_fps=60.0, ff=None):
-    """How many video frames to advance per analyzed frame.
-
-    Slow-motion footage has many frames per *real* second (a 4x replay at
-    60 fps = 240 real fps), far more than a swing needs. By default we skip
-    frames so analysis runs at about ``max_real_fps`` of real time. ``ff``
-    ("fast-forward") forces every Nth frame instead.
-    """
-    if ff:
-        return max(1, int(ff))
-    real = native_fps * max(speed, 1e-9)
-    return max(1, round(real / max_real_fps)) if max_real_fps else 1
+def frame_step(clip_frames, max_frames=240):
+    """Analyze every Nth frame so a clip yields at most ``max_frames`` frames.
+    Slow-motion clips have far more frames than a swing needs; the swing's own
+    clock keeps the comparison right however many are skipped."""
+    if not max_frames or clip_frames <= max_frames:
+        return 1
+    return max(1, math.ceil(clip_frames / max_frames))
 
 
 def read_frames(path, start=0.0, end=None, step=1):

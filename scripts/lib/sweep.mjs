@@ -7,7 +7,7 @@
 
 import { makeSpec, renderSwing, archetypeEntry, ARCHETYPES } from '../../src/core/synth.js';
 import { prepareSwing, compareSwing } from '../../src/core/compare.js';
-import { suggestStanceFrame, detectPitcherSide, estimateSlowMotion } from '../../src/core/sequence.js';
+import { suggestStanceFrame, detectPitcherSide, estimateSwingFps } from '../../src/core/sequence.js';
 import { rankStances, retarget, boneLengths } from '../../src/core/match.js';
 import { evaluateFeedback } from '../../src/core/feedback.js';
 import { prepareEntry } from '../../src/core/db.js';
@@ -79,7 +79,6 @@ export function flicker(frames, p, seed = 13) {
  * @param {object} [c.spec] makeSpec overrides on top of placeholder A
  * @param {object} [c.render] renderSwing options on top of REF_RENDER
  * @param {(frames:number[][], meta:object)=>number[][]} [c.post] 2D post-processing
- * @param {number} [c.claimSpeed] slow-motion factor the user tells the app (default: the true one)
  */
 export function renderCase(c = {}) {
   const spec = makeSpec({ ...BASE_SPEC, ...(c.spec || {}), tracks: { ...(BASE_SPEC.tracks || {}), ...(c.spec?.tracks || {}) } });
@@ -89,8 +88,7 @@ export function renderCase(c = {}) {
   return {
     frames,
     fps: r.fps,
-    trueSpeed: r.speedFactor,
-    speedFactor: c.claimSpeed ?? r.speedFactor,
+    trueSpeed: r.speedFactor, // the app is never told this
     width: r.width,
     height: r.height,
     truePhases: r.phases,
@@ -103,15 +101,13 @@ export function renderCase(c = {}) {
  * Run a rendered case through the user pipeline (auto stance and pitcher
  * side unless given) against the pro, and score it against ground truth.
  */
-export function evaluateCase(cs, pro = referencePro(), { stanceShiftSec = 0, acceptSlowmo = false } = {}) {
-  // The app checks clips that claim to be real time for slow motion.
-  const slowmo = cs.speedFactor === 1 ? estimateSlowMotion(cs.frames, cs.fps) : { factor: 1, peak: NaN };
-  if (acceptSlowmo && slowmo.factor > 1) cs = { ...cs, speedFactor: slowmo.factor };
-  const realFps = cs.fps * cs.speedFactor;
-  let stance = suggestStanceFrame(cs.frames, realFps);
+export function evaluateCase(cs, pro = referencePro(), { stanceShiftSec = 0 } = {}) {
+  // Like the app: only the video frame rate is known; the swing sets its own clock.
+  const swingFps = estimateSwingFps(cs.frames, cs.fps);
+  let stance = suggestStanceFrame(cs.frames, swingFps);
   if (stanceShiftSec) stance = Math.max(0, Math.round(stance + stanceShiftSec * cs.fps * cs.trueSpeed));
-  const side = detectPitcherSide(cs.frames, stance, realFps);
-  const user = prepareSwing({ frames: cs.frames, fps: cs.fps, speedFactor: cs.speedFactor, stanceIndex: stance, pitcherSide: side.side });
+  const side = detectPitcherSide(cs.frames, stance, swingFps);
+  const user = prepareSwing({ frames: cs.frames, fps: cs.fps, swingFps, stanceIndex: stance, pitcherSide: side.side });
   const [rank] = rankStances(user.stancePose, [pro]);
   const cmp = compareSwing(user, pro.prep);
   const items = evaluateFeedback({ ...user, phases: cmp.phases }, pro.prep, { proName: 'Pro' });
@@ -121,8 +117,9 @@ export function evaluateCase(cs, pro = referencePro(), { stanceShiftSec = 0, acc
   for (const k of PHASE_KEYS.filter((k) => k !== 'stance')) phaseErrMs[k] = Math.abs(cmp.phases[k] - cs.truePhases[k]) * msPerFrame;
   const worst = items.reduce((a, b) => (b.score > a.score ? b : a), items[0]);
   return {
-    slowmoSuggested: slowmo.factor,
-    speedUsed: cs.speedFactor,
+    swingFps,
+    // Swing clock vs. the true real-time rate (tempo changes show up here on purpose).
+    clockRatio: swingFps / (cs.fps * cs.trueSpeed),
     sideCorrect: side.side === cs.trueSide,
     sideConfidence: side.confidence,
     stance,
@@ -143,7 +140,7 @@ export function evaluateCase(cs, pro = referencePro(), { stanceShiftSec = 0, acc
 /** A pro recorded under a condition, prepared with its true phases. */
 export function proFromCase(c) {
   const cs = renderCase(c);
-  const prep = prepareSwing({ frames: cs.frames, fps: cs.fps, speedFactor: cs.speedFactor, stanceIndex: cs.truePhases.stance, pitcherSide: cs.trueSide, phases: cs.truePhases });
+  const prep = prepareSwing({ frames: cs.frames, fps: cs.fps, stanceIndex: cs.truePhases.stance, pitcherSide: cs.trueSide, phases: cs.truePhases });
   return { id: 'pro-variant', name: 'Pro (variant)', prep, stancePose: prep.stancePose, meta: {} };
 }
 
@@ -197,9 +194,13 @@ export const CONDITIONS = [
   { group: 'time', kind: 'invariant', name: '24 fps', case: { render: { fps: 24 } } },
   { group: 'time', kind: 'invariant', name: '120 fps', case: { render: { fps: 120 } } },
   { group: 'time', kind: 'invariant', name: '240 fps', case: { render: { fps: 240 } } },
-  { group: 'time', kind: 'invariant', name: '4x slow motion (120 fps capture at 30 fps), speed set', case: { render: { fps: 30, speedFactor: 4 } } },
-  { group: 'time', kind: 'invariant', name: '8x slow motion (240 fps capture at 30 fps), speed set', case: { render: { fps: 30, speedFactor: 8 } } },
-  { group: 'time', kind: 'invariant', name: 'slow motion thinned by the tool (--speed 4 at 60 fps -> every 4th frame)', case: { render: { fps: 15, speedFactor: 4 } } },
+  { group: 'time', kind: 'invariant', name: '4x slow motion (120 fps capture played at 30 fps), nothing entered', case: { render: { fps: 30, speedFactor: 4 } } },
+  { group: 'time', kind: 'invariant', name: '8x slow motion (240 fps capture played at 30 fps), nothing entered', case: { render: { fps: 30, speedFactor: 8 } } },
+  { group: 'time', kind: 'invariant', name: '8x slow motion played at 60 fps, nothing entered', case: { render: { fps: 60, speedFactor: 8 } } },
+  { group: 'time', kind: 'invariant', name: '16x slow motion with 3 px jitter, nothing entered', case: { render: { fps: 30, speedFactor: 16, noisePx: 3 } } },
+  { group: 'time', kind: 'invariant', name: 'slow motion thinned to a frame budget (4x at 60 fps, every 4th frame)', case: { render: { fps: 15, speedFactor: 4 } } },
+  { group: 'time', kind: 'invariant', name: 'swing 25% slower overall (tempo is not compared)', case: { spec: { tempo: 1.25 } } },
+  { group: 'time', kind: 'invariant', name: 'swing 20% quicker overall', case: { spec: { tempo: 0.8 } } },
   { group: 'time', kind: 'invariant', name: 'long lead-in with bat waggle (3 s)', case: { spec: { idle: 0.04 }, render: { preRoll: 3 } } },
   { group: 'time', kind: 'invariant', name: 'clip starts right at the stance', case: { render: { preRoll: 0.05 } } },
   { group: 'time', kind: 'invariant', name: 'long tail after the finish (3 s)', case: { render: { postRoll: 3 } } },
@@ -216,9 +217,6 @@ export const CONDITIONS = [
   { group: 'robust', kind: 'limit', name: 'camera 25° off perpendicular', case: cam({ yaw: 25 }) },
   { group: 'robust', kind: 'robust', name: 'perspective camera 8 m away', case: cam({ distance: 8 }) },
   { group: 'robust', kind: 'robust', name: 'perspective camera 4 m away', case: cam({ distance: 4 }) },
-  { group: 'robust', kind: 'limit', name: 'slow motion (4x) with speed NOT set, suggestion ignored', case: { render: { fps: 30, speedFactor: 4 }, claimSpeed: 1 } },
-  { group: 'time', kind: 'invariant', name: 'slow motion (4x) with speed NOT set, app suggestion accepted', case: { render: { fps: 30, speedFactor: 4 }, claimSpeed: 1 }, opts: { acceptSlowmo: true } },
-  { group: 'time', kind: 'invariant', name: 'slow motion (8x) at 60 fps, speed NOT set, suggestion accepted', case: { render: { fps: 60, speedFactor: 8 }, claimSpeed: 1 }, opts: { acceptSlowmo: true } },
   { group: 'robust', kind: 'robust', name: 'different pose model (neck/hips placed differently)', case: { post: (f) => poseModelBias(f) } },
   {
     group: 'robust', kind: 'robust', name: 'realistic phone video: portrait 30 fps, 1.40 m kid, 4° tilt, jitter, dropouts, waggle',
@@ -244,12 +242,6 @@ export const CONDITIONS = [
     group: 'sensitive', kind: 'sensitive', name: 'hands set 15 cm lower in the stance',
     case: { spec: { tracks: { hands: { stance: [0.4, -0.25, 1.25], loadStart: [0.38, -0.27, 1.27] } } } },
     expect: ['stance.handsHeight'],
-  },
-  {
-    group: 'sensitive', kind: 'sensitive', name: 'swing 25% slower overall',
-    case: { spec: { tempo: 1.25 } },
-    expect: ['timing.swing'],
-    allow: ['timing.stride'],
   },
   {
     group: 'sensitive', kind: 'sensitive', name: 'hips open 25° less at contact',

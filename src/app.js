@@ -3,7 +3,7 @@
 
 import { loadDatabase, makeEntry } from './core/db.js';
 import { prepareSwing, compareSwing } from './core/compare.js';
-import { detectPitcherSide, suggestStanceFrame, canonToImage, detectionCoverage, estimateSlowMotion } from './core/sequence.js';
+import { detectPitcherSide, suggestStanceFrame, canonToImage, detectionCoverage, estimateSwingFps } from './core/sequence.js';
 import { rankStances, rescaleBones } from './core/match.js';
 import { evaluateFeedback, summarize, formatValue, formatDelta, TORSO_TO_HEIGHT } from './core/feedback.js';
 import { PHASES, phaseLabel } from './core/phases.js';
@@ -23,7 +23,10 @@ const state = {
   videoUrl: null,
   videoFps: 30,
   isDemo: false,
-  analysis: null, // { frames, times, fps, width, height, speedFactor }
+  analysis: null, // { frames, times, fps, width, height }
+  swingFps: 30, // the swing's own clock (frames per swing-second)
+  userBeats: null, // beats the user adjusted by hand (frame indices), or null for automatic
+  beatKey: 'contact', // beat selected in the beat editor
   stanceIndex: 0,
   suggestedStance: 0,
   sideDetect: null,
@@ -61,10 +64,6 @@ function heightInches() {
 
 function torsoIn() {
   return heightInches() * TORSO_TO_HEIGHT;
-}
-
-function speedFactor() {
-  return Number($('set-speed').value) || 1;
 }
 
 function showError(msg) {
@@ -142,6 +141,7 @@ async function onFile(file) {
   state.isDemo = false;
   state.file = file;
   state.swingId = null;
+  state.userBeats = null;
   state.videoUrl = URL.createObjectURL(file);
   const video = document.createElement('video');
   video.preload = 'auto';
@@ -230,7 +230,7 @@ async function runAnalysis() {
         drawSkeleton(ctx, frame, { map: (x, y) => [ox + x * s, oy + y * s], lineWidth: 2.5, radius: 2.5 });
       },
     });
-    state.analysis = { ...res, speedFactor: speedFactor() };
+    state.analysis = res;
     saveNewSwing({ start, end, quality });
     afterAnalysis();
   } catch (e) {
@@ -255,11 +255,11 @@ function runDemo() {
   const d = demoUserSwing();
   state.isDemo = true;
   state.swingId = null;
+  state.userBeats = null;
   state.video = null;
-  $('set-speed').value = '1';
   $('set-ft').value = '5';
   $('set-in').value = '9';
-  state.analysis = { frames: d.frames, times: d.times.map((t) => t - d.times[0]), fps: d.fps, width: d.width, height: d.height, speedFactor: 1 };
+  state.analysis = { frames: d.frames, times: d.times.map((t) => t - d.times[0]), fps: d.fps, width: d.width, height: d.height };
   show('step-upload', false);
   afterAnalysis();
 }
@@ -275,10 +275,11 @@ function afterAnalysis(saved = null) {
     showError('We could not find a person in most of the video. Make sure your whole body is visible, the lighting is good, and you are the only person in the frame.');
     return;
   }
-  const realFps = a.fps * a.speedFactor;
-  state.suggestedStance = suggestStanceFrame(a.frames, realFps);
+  // The swing's own clock: slow motion and frame rate need no setting.
+  state.swingFps = estimateSwingFps(a.frames, a.fps);
+  state.suggestedStance = suggestStanceFrame(a.frames, state.swingFps);
   state.stanceIndex = saved?.stanceIndex ?? state.suggestedStance;
-  state.sideDetect = detectPitcherSide(a.frames, state.stanceIndex, realFps);
+  state.sideDetect = detectPitcherSide(a.frames, state.stanceIndex, state.swingFps);
   state.pitcherSide = saved?.pitcherSide ?? state.sideDetect.side;
   document.querySelector(`#pitcher-side input[value="${state.pitcherSide}"]`).checked = true;
   const conf = Math.round(state.sideDetect.confidence * 100);
@@ -288,9 +289,6 @@ function afterAnalysis(saved = null) {
     note.hidden = false;
     note.textContent = `Your body was only found in ${Math.round(coverage * 100)}% of frames. Results may be less reliable; a clearer, steadier video helps.`;
   } else note.hidden = true;
-
-  state.slowmo = a.speedFactor === 1 ? estimateSlowMotion(a.frames, a.fps) : { factor: 1 };
-  renderSlowmoNotes();
 
   stages.stance?.destroy();
   stages.stance = new Stage($('stance-stage'), { video: state.video, width: a.width, height: a.height, label: stageLabel() });
@@ -342,7 +340,7 @@ function compare() {
     state.user = prepareSwing({
       frames: a.frames,
       fps: a.fps,
-      speedFactor: a.speedFactor,
+      swingFps: state.swingFps,
       stanceIndex: state.stanceIndex,
       pitcherSide: state.pitcherSide,
     });
@@ -351,8 +349,10 @@ function compare() {
     return;
   }
   showError('');
+  // Hand-set beats belong to a stance; a new stance starts from automatic beats.
+  if (state.userBeats && state.userBeats.stance !== state.stanceIndex) state.userBeats = null;
   if (state.swingId) {
-    library.updateSwing(state.swingId, { stanceIndex: state.stanceIndex, pitcherSide: state.pitcherSide, height: heightInches() }).catch(() => {});
+    library.updateSwing(state.swingId, { stanceIndex: state.stanceIndex, pitcherSide: state.pitcherSide, height: heightInches(), beats: state.userBeats }).catch(() => {});
   }
   state.ranking = rankStances(state.user.stancePose, state.pros);
   // The video element moves into the results player, so the stance step closes.
@@ -383,10 +383,16 @@ function selectPro(pro) {
   $('evidence-note').hidden = true;
   state.pro = pro;
   state.proFitted = null;
-  state.comparison = compareSwing(state.user, pro.prep);
-  const userForRules = { ...state.user, phases: state.comparison.phases };
-  state.items = evaluateFeedback(userForRules, pro.prep, { proName: pro.name.split(' — ')[0], timingKnown: true });
+  runComparison();
   renderResults();
+}
+
+/** Compare with the selected pro, using hand-set beats when there are any. */
+function runComparison() {
+  const pro = state.pro;
+  state.comparison = compareSwing(state.user, pro.prep, state.userBeats ? { phases: state.userBeats } : {});
+  const userForRules = { ...state.user, phases: state.comparison.phases };
+  state.items = evaluateFeedback(userForRules, pro.prep, { proName: pro.name.split(' — ')[0] });
 }
 
 // ---------------------------------------------------------------- results
@@ -570,11 +576,8 @@ function renderFeedback() {
     g.append(h, blurb, box);
     groups.appendChild(g);
   }
-  const sf = state.analysis.speedFactor;
   $('timing-note').textContent =
-    sf === 1
-      ? 'Timing checks assume your video plays in real time. If it was recorded in slow motion, set "Video speed" in the settings and analyze again.'
-      : `Timing adjusted for ${sf}× slow motion.`;
+    'Tempo is not compared: each swing runs on its own clock, so slow motion, frame rate and swing speed don’t matter. Positions are compared at matching beats; adjust the beats under the player if one looks off.';
 }
 
 function renderScores() {
@@ -626,13 +629,75 @@ function renderTimeline() {
     chip.type = 'button';
     chip.className = 'chip';
     chip.dataset.phase = ph.key;
-    chip.textContent = `${ph.label} · ${fmtTime(a.times[i])}`;
+    const edited = state.userBeats && ph.key !== 'stance' && state.comparison.phases[ph.key] !== state.comparison.autoPhases[ph.key];
+    chip.textContent = `${ph.label} · ${fmtTime(a.times[i])}${edited ? ' ✎' : ''}`;
     chip.addEventListener('click', () => {
       clearEvidence();
+      if (ph.key !== 'stance') selectBeat(ph.key);
       player.seek(i);
     });
     chips.appendChild(chip);
   }
+  renderBeatEditor();
+}
+
+// ---------------------------------------------------------------- beat editor
+
+function selectBeat(key) {
+  state.beatKey = key;
+  renderBeatEditor();
+}
+
+function renderBeatEditor(note = '') {
+  const sel = $('beat-select');
+  if (sel.value !== state.beatKey) sel.value = state.beatKey;
+  const i = state.comparison.phases[state.beatKey];
+  const auto = state.comparison.autoPhases[state.beatKey];
+  const where = `${phaseLabel(state.beatKey)} is at frame ${i + 1} (${fmtTime(state.analysis.times[i])})`;
+  const status = !state.userBeats
+    ? `Automatic beats. ${where}.`
+    : i !== auto
+      ? `Beats adjusted by hand. ${where}; detected at frame ${auto + 1}.`
+      : `Beats adjusted by hand. ${where}, as detected.`;
+  $('beat-status').textContent = note ? `${note} ${status}` : status;
+  $('beat-reset').disabled = !state.userBeats;
+}
+
+/** Move one beat to a frame (kept between its neighbours) and recompare. */
+function setBeat(key, frame) {
+  const phases = { ...state.comparison.phases };
+  const order = PHASES.map((p) => p.key);
+  const k = order.indexOf(key);
+  const lo = phases[order[k - 1]] + 1;
+  const hi = k + 1 < order.length ? phases[order[k + 1]] - 1 : state.analysis.frames.length - 1;
+  if (lo > hi) {
+    renderBeatEditor(`No room to move ${phaseLabel(key)}: move a neighbouring beat first.`);
+    return;
+  }
+  const f = Math.max(lo, Math.min(hi, Math.round(frame)));
+  phases[key] = f;
+  applyBeats(phases);
+  player.seek(f);
+  if (f !== Math.round(frame)) {
+    renderBeatEditor(`${phaseLabel(key)} has to stay between ${phaseLabel(order[k - 1])} and ${k + 1 < order.length ? phaseLabel(order[k + 1]) : 'the end of the clip'}, so it went as far as it can.`);
+  }
+}
+
+function applyBeats(beats) {
+  clearEvidence();
+  state.userBeats = beats;
+  if (state.swingId) library.updateSwing(state.swingId, { beats }).catch(() => {});
+  runComparison();
+  refreshResults();
+}
+
+function refreshResults() {
+  renderScores();
+  renderFeedback();
+  renderTimeline();
+  renderCharts();
+  state.sceneBounds = null;
+  drawResultFrame(player.index);
 }
 
 function currentPhase(i) {
@@ -843,7 +908,6 @@ function exportPose() {
     notes: 'Exported from Swing Match. Same format as the pro database (swing-db/v1).',
     source: state.isDemo ? 'Swing Match demo swing (synthetic)' : 'Swing Match (MediaPipe Pose → BODY_25)',
     fps: a.fps,
-    speedFactor: a.speedFactor,
     width: a.width,
     height: a.height,
     pitcherSide: state.pitcherSide,
@@ -867,39 +931,8 @@ function exportReport() {
     segments: state.comparison.segments.map((s) => ({ key: s.key, label: s.label, score: Math.round(s.score * 10) / 10 })),
     phases: Object.fromEntries(Object.entries(state.comparison.phases).map(([k, i]) => [k, { frame: i, time: state.analysis.times[i] }])),
     feedback: state.items.map(({ id, phase, label, unit, user, pro, delta, severity, message, tip }) => ({ id, phase, label, unit, user, pro, delta, severity, message, tip })),
-    units: { len: 'torso lengths (Neck→MidHip at stance)', deg: 'degrees', sec: 'seconds' },
+    units: { len: 'torso lengths (body-proportional, at stance)', deg: 'degrees' },
   });
-}
-
-/** Offer to treat a clip as slow motion when its hand speed says it is. */
-function renderSlowmoNotes() {
-  const est = state.slowmo;
-  for (const el of document.querySelectorAll('.slowmo-note')) {
-    el.textContent = '';
-    el.hidden = !(est && est.factor > 1 && state.analysis?.speedFactor === 1);
-    if (el.hidden) continue;
-    const text = document.createElement('span');
-    text.textContent = `This looks like slow motion (about ${est.factor}×): your fastest hand movement is only ${est.peak.toFixed(1)} torso-lengths per second, slower than any real-time swing. Timing and the stance pick assume real time until you fix it.`;
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'btn small-btn';
-    btn.textContent = `Treat as ${est.factor}× slow motion`;
-    btn.addEventListener('click', () => applySlowMotion(est.factor));
-    el.append(text, btn);
-  }
-}
-
-/** Re-time an analyzed clip as slow motion (no need to re-run pose detection). */
-function applySlowMotion(factor) {
-  const a = state.analysis;
-  a.speedFactor = factor;
-  $('set-speed').value = String(factor);
-  state.slowmo = { factor: 1 };
-  if (state.swingId) library.updateSwing(state.swingId, { analysis: a, stanceIndex: null }).catch(() => {});
-  const wasResults = !$('results').hidden;
-  show('results', false);
-  afterAnalysis();
-  if (wasResults) compare();
 }
 
 // ---------------------------------------------------------------- saved swings
@@ -971,9 +1004,9 @@ async function renderSavedList() {
     meta.textContent = [
       fmtDate(rec.createdAt),
       `${dur.toFixed(1)} s`,
-      a.speedFactor > 1 ? `${a.speedFactor}× slow-mo` : '',
       rec.hasVideo ? 'video saved' : 'poses only',
       rec.stanceIndex != null ? 'stance picked' : '',
+      rec.beats ? 'beats adjusted' : '',
     ]
       .filter(Boolean)
       .join(' · ');
@@ -1020,7 +1053,7 @@ async function openSaved(id) {
   state.swingId = rec.id;
   state.thumbPending = !rec.thumb;
   state.analysis = rec.analysis;
-  $('set-speed').value = String(rec.analysis.speedFactor || 1);
+  state.userBeats = rec.beats || null;
   if (rec.height) {
     $('set-ft').value = String(Math.floor(rec.height / 12));
     $('set-in').value = String(rec.height % 12);
@@ -1101,6 +1134,21 @@ function wire() {
   $('timeline').addEventListener('input', () => {
     clearEvidence();
     player.seek(Number($('timeline').value));
+  });
+  $('beat-select').addEventListener('change', () => {
+    selectBeat($('beat-select').value);
+    clearEvidence();
+    player.seek(state.comparison.phases[state.beatKey]);
+  });
+  $('beat-set').addEventListener('click', () => setBeat(state.beatKey, player.index));
+  $('beat-prev').addEventListener('click', () => setBeat(state.beatKey, state.comparison.phases[state.beatKey] - 1));
+  $('beat-next').addEventListener('click', () => setBeat(state.beatKey, state.comparison.phases[state.beatKey] + 1));
+  $('beat-reset').addEventListener('click', () => {
+    clearEvidence();
+    state.userBeats = null;
+    if (state.swingId) library.updateSwing(state.swingId, { beats: null }).catch(() => {});
+    runComparison();
+    refreshResults();
   });
   $('evidence-clear').addEventListener('click', () => {
     clearEvidence();

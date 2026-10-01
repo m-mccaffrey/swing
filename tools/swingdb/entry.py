@@ -25,7 +25,7 @@ def _num(v, digits):
 
 
 def make_entry(*, id, name, fps, pitcher_side, stance_frame, phases, frames, team="", bats="", notes="",
-               source="", speed_factor=1, width=None, height=None, clip=None):
+               source="", width=None, height=None, clip=None):
     entry = {
         "schema": SCHEMA,
         "id": id,
@@ -36,7 +36,6 @@ def make_entry(*, id, name, fps, pitcher_side, stance_frame, phases, frames, tea
         "source": source,
         "keypointFormat": "BODY_25",
         "fps": _num(fps, 3),
-        "speedFactor": _num(speed_factor, 3),
     }
     if width and height:
         entry["image"] = {"width": int(width), "height": int(height)}

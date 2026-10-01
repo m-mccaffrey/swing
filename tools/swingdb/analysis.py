@@ -274,21 +274,69 @@ def motion_energy(frames, fps):
     return [mean([s[i] for s in per if isfin(s[i])]) for i in range(len(frames))]
 
 
-SLOWMO_SPEED_LIMIT = 3
-TYPICAL_HAND_SPEED = 8
+SWING_BURST_SEC = 0.586
 
 
-def estimate_slow_motion(frames, fps):
-    """(peak, factor): factor 1 = looks real time, else a power of two.
-    Mirrors estimateSlowMotion() in sequence.js."""
-    peak = 0.0
-    for v in hand_speed_series(frames, fps):
-        if isfin(v) and v > peak:
-            peak = v
-    if not (peak > 0) or peak >= SLOWMO_SPEED_LIMIT:
-        return peak, 1
-    factor = clamp(2 ** jsround(math.log2(TYPICAL_HAND_SPEED / peak)), 2, 16)
-    return peak, int(factor)
+def _burst_of(frames, swing_fps):
+    s = hand_speed_series(frames, swing_fps)
+    z = lambda v: v if isfin(v) else 0  # noqa: E731  (JS `v || 0`)
+    p = 0
+    for i in range(1, len(s)):
+        if z(s[i]) > z(s[p]):
+            p = i
+    thr = 0.25 * z(s[p])
+    if not (thr > 0):
+        return None
+    a = b = p
+    while a - 1 >= 0 and isfin(s[a - 1]) and s[a - 1] > thr:
+        a -= 1
+    while b + 1 < len(s) and isfin(s[b + 1]) and s[b + 1] > thr:
+        b += 1
+    fa = (s[a] - thr) / (s[a] - s[a - 1]) if a > 0 else 0.0
+    fb = (s[b] - thr) / (s[b] - s[b + 1]) if b < len(s) - 1 else 0.0
+    return b - a + fa + fb, a, b
+
+
+def _hand_travel(frames, a, b, half_window):
+    tl = _or1(torso_length(frames))
+
+    def avg(c):
+        x = y = 0.0
+        n = 0
+        for i in range(max(0, c - half_window), min(len(frames) - 1, c + half_window) + 1):
+            h = _mid_of(frames[i], KP["LWrist"], KP["RWrist"])
+            if h:
+                x += h[0]
+                y += h[1]
+                n += 1
+        return (x / n, y / n) if n else None
+
+    pa, pb = avg(a), avg(b)
+    return math.hypot(pb[0] - pa[0], pb[1] - pa[1]) / tl if pa and pb else 0.0
+
+
+def estimate_swing_fps(frames, fps):
+    """The swing's own clock in frames per swing-second, from the length of
+    the hand burst; slow motion and frame rate need no setting. Mirrors
+    estimateSwingFps() in sequence.js."""
+    best = None
+    for k in (0.5, 1, 2, 4, 8, 16):
+        est = fps * k
+        prev = est
+        burst = None
+        for _ in range(3):
+            burst = _burst_of(frames, est)
+            if not burst or not (burst[0] > 0):
+                break
+            prev = est
+            est = burst[0] / SWING_BURST_SEC
+        if not burst or not (burst[0] > 0):
+            continue
+        ok = abs(math.log(est / prev)) < 0.25
+        travel = _hand_travel(frames, burst[1], burst[2], max(1, jsround(est * 0.02)))
+        if best is None or (ok and (not best[1] or travel > best[2])):
+            best = (est, ok, travel)
+    return clamp(best[0], 5, 5000) if best and isfin(best[0]) else fps
 
 
 def suggest_stance_frame(frames, fps):
@@ -646,13 +694,16 @@ def detect_phases(frames, fps, stance_index=0):
     )
 
 
-def auto_detect(frames, real_fps, stance_index=None, pitcher_side=None):
-    """Stance, pitcher side and phases for raw pixel frames, with the same
-    defaults as scripts/openpose-to-db.mjs and the browser builder."""
-    stance = suggest_stance_frame(frames, real_fps) if stance_index is None else stance_index
-    side, confidence, votes = detect_pitcher_side(frames, stance, real_fps)
+def auto_detect(frames, fps, stance_index=None, pitcher_side=None):
+    """Swing clock, stance, pitcher side and beats for raw pixel frames, with
+    the same defaults as the browser builder. `fps` is the video frame rate of
+    the frames; slow motion is handled by the swing clock."""
+    swing_fps = estimate_swing_fps(frames, fps)
+    stance = suggest_stance_frame(frames, swing_fps) if stance_index is None else stance_index
+    side, confidence, votes = detect_pitcher_side(frames, stance, swing_fps)
     if pitcher_side:
         side = pitcher_side
-    canon = canonicalize(frames, pitcher_side=side, stance_index=stance, fps=real_fps)
-    phases = detect_phases(canon, real_fps, stance)
-    return {"stance": stance, "pitcherSide": side, "sideConfidence": confidence, "votes": votes, "phases": phases, "canon": canon}
+    canon = canonicalize(frames, pitcher_side=side, stance_index=stance, fps=swing_fps)
+    phases = detect_phases(canon, swing_fps, stance)
+    return {"stance": stance, "pitcherSide": side, "sideConfidence": confidence, "votes": votes, "phases": phases,
+            "canon": canon, "swingFps": swing_fps}

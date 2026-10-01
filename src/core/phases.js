@@ -80,7 +80,7 @@ export function findContact(series, lo, hi) {
 /**
  * Detect phases from a canonical sequence.
  * @param {number[][]} frames canonical frames
- * @param {number} fps frames per second of real time
+ * @param {number} fps frames per swing-second (see estimateSwingFps)
  * @param {number} stanceIndex chosen stance frame
  */
 export function detectPhases(frames, fps, stanceIndex = 0, series = computeSeries(frames, stanceIndex, fps)) {
@@ -124,8 +124,8 @@ export function detectPhases(frames, fps, stanceIndex = 0, series = computeSerie
  */
 export function refinePhases(user, estimate, pro, windowSec = 0.15) {
   const out = { ...estimate };
-  const wu = Math.max(1, Math.round(windowSec * user.realFps));
-  const wp = Math.max(1, Math.round(windowSec * pro.realFps));
+  const wu = Math.max(1, Math.round(windowSec * user.swingFps));
+  const wp = Math.max(1, Math.round(windowSec * pro.swingFps));
   const finders = {
     contact: (S, lo, hi) => findContact(S, lo, hi),
     footPlant: (S, lo, hi, st, c) => findFootPlant(S, lo, hi, st, c),
@@ -136,14 +136,14 @@ export function refinePhases(user, estimate, pro, windowSec = 0.15) {
     const pc = pro.phases.contact;
     const hp = find(pro.series, pro.phases[key] - wp, pro.phases[key] + wp, pro.stanceIndex, pc);
     if (hp < 0) continue;
-    const offsetSec = (pro.phases[key] - hp) / pro.realFps;
+    const offsetSec = (pro.phases[key] - hp) / pro.swingFps;
     const uc = key === 'contact' ? estimate.contact + wu : out.contact;
     const hu = find(user.series, out[key] - wu, out[key] + wu, user.stanceIndex, uc);
     if (hu < 0) continue;
-    out[key] = hu + Math.round(offsetSec * user.realFps);
+    out[key] = hu + Math.round(offsetSec * user.swingFps);
   }
   // Keep the later phases after the refined contact.
-  const gap = (a, b) => Math.max(1, Math.round((pro.phases[b] - pro.phases[a]) / pro.realFps * user.realFps));
+  const gap = (a, b) => Math.max(1, Math.round((pro.phases[b] - pro.phases[a]) / pro.swingFps * user.swingFps));
   if (out.extension <= out.contact) out.extension = out.contact + gap('contact', 'extension');
   if (out.finish <= out.extension) out.finish = out.extension + gap('extension', 'finish');
   return sanitizePhases(out, user.canon.length);

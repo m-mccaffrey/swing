@@ -24,6 +24,28 @@ def draw_skeleton(img, frame, min_conf=0.1):
             cv2.circle(img, pt(j), 3 * scale, (bl, g, r), -1, cv2.LINE_AA)
 
 
+def scale_frame(frame, s):
+    """A BODY_25 pixel frame scaled by ``s`` (confidences unchanged)."""
+    return [v if i % 3 == 2 else v * s for i, v in enumerate(frame)]
+
+
+def encode_thumb(img, scale, quality=85):
+    """JPEG bytes of a BGR image resized by ``scale``."""
+    import cv2
+
+    if scale < 1:
+        img = cv2.resize(img, (max(1, round(img.shape[1] * scale)), max(1, round(img.shape[0] * scale))), interpolation=cv2.INTER_AREA)
+    ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    return buf.tobytes() if ok else b""
+
+
+def decode_thumb(data):
+    import cv2
+    import numpy as np
+
+    return cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
+
+
 def contact_sheet(images_by_phase, frames, phases, fps, out_path, title=""):
     """images_by_phase: {phase_key: bgr image}; frames: BODY_25 pixel frames."""
     import cv2

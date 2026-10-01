@@ -41,19 +41,20 @@ class ParityWithJavaScript(unittest.TestCase):
     def test_detection_matches(self):
         for c in self.cases:
             with self.subTest(case=c["name"]):
-                frames, fps = c["frames"], c["fps"]
-                stance = analysis.suggest_stance_frame(frames, fps)
+                frames = c["frames"]
+                swing_fps = analysis.estimate_swing_fps(frames, c["fps"])
+                self.assertAlmostEqual(swing_fps, c["swingFps"], places=6)
+                stance = analysis.suggest_stance_frame(frames, swing_fps)
                 self.assertEqual(stance, c["stance"])
-                side, conf, _ = analysis.detect_pitcher_side(frames, stance, fps)
+                side, conf, _ = analysis.detect_pitcher_side(frames, stance, swing_fps)
                 self.assertEqual(side, c["side"])
                 self.assertAlmostEqual(conf, c["confidence"], places=9)
-                canon = analysis.canonicalize(frames, pitcher_side=side, stance_index=stance, fps=fps)
+                canon = analysis.canonicalize(frames, pitcher_side=side, stance_index=stance, fps=swing_fps)
                 worst = max(abs(a - b) for fa, fb in zip(canon, c["canon"]) for a, b in zip(fa, fb))
                 self.assertLess(worst, 1e-9)
-                self.assertEqual(analysis.detect_phases(canon, fps, stance), c["phases"])
-                peak, factor = analysis.estimate_slow_motion(frames, c["videoFps"])
-                self.assertAlmostEqual(peak, c["slowPeak"], places=9)
-                self.assertEqual(factor, c["slowFactor"])
+                self.assertEqual(analysis.detect_phases(canon, swing_fps, stance), c["phases"])
+                det = analysis.auto_detect(frames, c["fps"])
+                self.assertEqual(det["phases"], c["phases"])
 
 
 class Helpers(unittest.TestCase):
@@ -66,14 +67,10 @@ class Helpers(unittest.TestCase):
     def test_frame_step(self):
         from swingdb.video import frame_step
 
-        self.assertEqual(frame_step(60, speed=1), 1)  # real-time 60 fps: every frame
-        self.assertEqual(frame_step(30, speed=1), 1)
-        self.assertEqual(frame_step(60, speed=4), 4)  # 4x replay at 60 fps = 240 real fps
-        self.assertEqual(frame_step(30, speed=8), 4)  # 8x at 30 fps = 240 real fps
-        self.assertEqual(frame_step(30, speed=2), 1)
-        self.assertEqual(frame_step(120, speed=1), 2)  # 120 fps real time
-        self.assertEqual(frame_step(60, speed=4, ff=2), 2)  # explicit fast-forward wins
-        self.assertEqual(frame_step(60, speed=4, max_real_fps=120), 2)
+        self.assertEqual(frame_step(180, 240), 1)  # 3 s at 60 fps: every frame
+        self.assertEqual(frame_step(420, 240), 2)  # 7 s at 60 fps (e.g. a slow-mo replay)
+        self.assertEqual(frame_step(1680, 240), 7)  # 7 s at 240 fps
+        self.assertEqual(frame_step(1000, 0), 1)  # no cap
 
     def test_jsround(self):
         self.assertEqual(analysis.jsround(2.5), 3)

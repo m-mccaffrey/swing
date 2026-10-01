@@ -46,7 +46,7 @@
           <ul>
             <li><strong>Side view:</strong> camera at 90&deg; to the pitch path, facing your chest (or your back). The pitcher should be off to the left or right of the frame.</li>
             <li><strong>Whole body in frame</strong> from head to feet for the entire swing, camera still (tripod or fence).</li>
-            <li><strong>Frame rate:</strong> 60 fps or slow motion if your phone can. You can tell us the slow-motion factor in the next step so timing is right.</li>
+            <li><strong>Frame rate:</strong> 60 fps or slow motion if your phone can. Nothing to set: the swing's own speed is measured.</li>
             <li>Good light, one person in frame, 2&ndash;8 seconds around a single swing.</li>
           </ul>
         </div>
@@ -84,14 +84,6 @@
                   <option value="15">15</option>
                   <option value="30">30</option>
                   <option value="60">60</option>
-                </select>
-              </label>
-              <label>Video speed
-                <select id="set-speed">
-                  <option value="1" selected>Real time</option>
-                  <option value="2">2&times; slow motion</option>
-                  <option value="4">4&times; slow motion (120 fps)</option>
-                  <option value="8">8&times; slow motion (240 fps)</option>
                 </select>
               </label>
             </div>
@@ -141,7 +133,6 @@
           </fieldset>
           <p class="muted small" id="pitcher-hint"></p>
           <p class="notice" id="coverage-note" hidden></p>
-          <div class="notice slowmo-note" hidden></div>
           <button class="btn primary" id="compare-btn" type="button">Compare my swing</button>
         </div>
       </div>
@@ -169,7 +160,6 @@
 
       <section class="card" aria-labelledby="h-swing">
         <h2 id="h-swing">Swing comparison</h2>
-        <div class="notice slowmo-note" hidden></div>
         <div class="scores" id="scores"></div>
         <div class="evidence-note" id="evidence-note" hidden role="status">
           <div>
@@ -202,6 +192,21 @@
           <label class="check"><input type="checkbox" id="ghost-toggle" checked> Pro ghost on video</label>
         </div>
         <div class="phase-chips" id="phase-chips"></div>
+        <div class="beat-editor" role="group" aria-labelledby="beat-editor-label">
+          <span id="beat-editor-label" class="beat-editor-title">Beat looks off?</span>
+          <select id="beat-select" aria-label="Beat to adjust">
+            <option value="load">Load</option>
+            <option value="footPlant">Foot plant</option>
+            <option value="contact" selected>Contact</option>
+            <option value="extension">Extension</option>
+            <option value="finish">Finish</option>
+          </select>
+          <button class="btn small-btn" id="beat-prev" type="button" aria-label="Move the beat one frame earlier">&#9664; 1 frame</button>
+          <button class="btn small-btn" id="beat-set" type="button">Set to the frame shown</button>
+          <button class="btn small-btn" id="beat-next" type="button" aria-label="Move the beat one frame later">1 frame &#9654;</button>
+          <button class="btn ghost small-btn" id="beat-reset" type="button">Reset to automatic</button>
+          <p class="muted small" id="beat-status"></p>
+        </div>
       </section>
 
       <section class="card" aria-labelledby="h-feedback">
@@ -247,8 +252,9 @@
         <li><strong>Pose estimation.</strong> MediaPipe Pose Landmarker runs in your browser on each frame. Its 33 landmarks are converted to the 25-keypoint <a href="https://cmu-perceptual-computing-lab.github.io/openpose/web/html/doc/md_doc_02_output.html">OpenPose BODY_25</a> format, the same format as the pro database.</li>
         <li><strong>Normalization.</strong> The swing is flipped so the pitcher is always to the right, joints are relabeled as front and back side (so left- and right-handed hitters compare directly), left/right label mix-ups are repaired, and everything is scaled to your torso length.</li>
         <li><strong>Stance match.</strong> Your stance frame is compared joint by joint with every pro stance. The closest one is your match.</li>
-        <li><strong>Swing alignment.</strong> Dynamic time warping lines up your movement from the stance onward with the pro&rsquo;s, so load, foot plant, contact, extension and finish line up even if your timing differs. Then key events are refined from your own motion.</li>
-        <li><strong>Feedback.</strong> About 30 checks compare what a side camera can measure: stance width, hand position, weight shift, stride, head movement, front-leg brace, spine tilt, hip and shoulder turn, contact point, extension, finish and timing.</li>
+        <li><strong>Swing clock.</strong> Each swing&rsquo;s tempo is measured from its own hand motion, so slow motion, frame rate and how fast someone swings don&rsquo;t matter. Tempo itself is not compared.</li>
+        <li><strong>Beats.</strong> Load, foot plant, contact, extension and finish are found by lining your movement up with the pro&rsquo;s and refining each one from your own motion. You can move any beat by hand. Between two beats, the swings are stretched to match.</li>
+        <li><strong>Feedback.</strong> About 28 checks compare what a side camera can measure at matching beats: stance width, hand position, weight shift, stride, head movement, front-leg brace, spine tilt, hip and shoulder turn, contact point, extension and finish.</li>
       </ol>
       <p class="muted small">Limits: a single side camera sees the swing in 2D, so rotation is estimated from how much the hips and shoulders narrow, and joint angles are apparent angles. The starter database holds clearly labeled synthetic placeholder swings. Real MLB swings can be added with the <a href="builder.html">database builder</a> or from OpenPose output (see the README).</p>
     </section>

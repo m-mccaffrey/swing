@@ -5,7 +5,7 @@
 import { archetypeEntry, demoUserSwing, makeSpec, renderSwing } from '../src/core/synth.js';
 import { entryFrames } from '../src/core/db.js';
 import { swapLR, LR_GROUPS, NUM_KP } from '../src/core/body25.js';
-import { suggestStanceFrame, detectPitcherSide, canonicalize, estimateSlowMotion } from '../src/core/sequence.js';
+import { suggestStanceFrame, detectPitcherSide, canonicalize, estimateSwingFps } from '../src/core/sequence.js';
 import { detectPhases } from '../src/core/phases.js';
 
 const cases = [];
@@ -33,14 +33,18 @@ cases.push({
 const tilted = renderSwing(makeSpec({ idle: 0.03 }), { fps: 30, preRoll: 1, postRoll: 0.5, noisePx: 1, camera: { roll: 6 }, seed: 21 });
 cases.push({ name: 'tilted-6deg', frames: tilted.frames, fps: tilted.fps });
 const slow = renderSwing(makeSpec({ bats: 'L' }), { fps: 30, speedFactor: 4, preRoll: 0.6, postRoll: 0.4, camera: { roll: -4 }, seed: 22 });
-cases.push({ name: 'lhh-slowmo4-tilted', frames: slow.frames, fps: slow.fps * 4, videoFps: slow.fps });
+cases.push({ name: 'lhh-slowmo4-tilted', frames: slow.frames, fps: slow.fps });
+const noisySlow = renderSwing(makeSpec({ tempo: 1.2 }), { fps: 30, speedFactor: 8, preRoll: 0.5, postRoll: 0.3, noisePx: 4, seed: 23 });
+cases.push({ name: 'noisy-slowmo8-slow-tempo', frames: noisySlow.frames, fps: noisySlow.fps });
 
+// Each case is analyzed the way the tools do it: only the video fps is known,
+// and everything runs on the swing's own clock.
 const out = cases.map((c) => {
-  const stance = suggestStanceFrame(c.frames, c.fps);
-  const side = detectPitcherSide(c.frames, stance, c.fps);
-  const { frames: canon } = canonicalize(c.frames, { pitcherSide: side.side, stanceIndex: stance, fps: c.fps });
-  const phases = detectPhases(canon, c.fps, stance);
-  const slow = estimateSlowMotion(c.frames, c.videoFps ?? c.fps);
-  return { name: c.name, fps: c.fps, videoFps: c.videoFps ?? c.fps, frames: c.frames, stance, side: side.side, confidence: side.confidence, phases, canon, slowPeak: slow.peak, slowFactor: slow.factor };
+  const swingFps = estimateSwingFps(c.frames, c.fps);
+  const stance = suggestStanceFrame(c.frames, swingFps);
+  const side = detectPitcherSide(c.frames, stance, swingFps);
+  const { frames: canon } = canonicalize(c.frames, { pitcherSide: side.side, stanceIndex: stance, fps: swingFps });
+  const phases = detectPhases(canon, swingFps, stance);
+  return { name: c.name, fps: c.fps, swingFps, frames: c.frames, stance, side: side.side, confidence: side.confidence, phases, canon };
 });
 process.stdout.write(JSON.stringify(out));

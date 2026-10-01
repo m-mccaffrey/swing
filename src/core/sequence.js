@@ -184,24 +184,81 @@ export function motionEnergy(frames, fps) {
   return frames.map((_, i) => mean(per.map((s) => s[i]).filter(Number.isFinite)));
 }
 
-/** Peak 2D hand speed (torso lengths/s) below which a "real-time" clip is almost certainly slow motion. */
-export const SLOWMO_SPEED_LIMIT = 3;
-/** Conservative typical peak 2D hand speed of a real-time swing, used to guess the factor. */
-export const TYPICAL_HAND_SPEED = 8;
+/**
+ * Length (seconds) of the "hand burst" of a typical swing: the stretch around
+ * the fastest hand movement where the hands move faster than a quarter of
+ * their peak speed (roughly launch to finish). It defines the app's unit of
+ * time, so this is a convention, calibrated so the reference swing runs at
+ * its true frame rate.
+ */
+export const SWING_BURST_SEC = 0.586;
+
+function burstOf(frames, swingFps) {
+  const s = handSpeedSeries(frames, swingFps);
+  let p = 0;
+  for (let i = 1; i < s.length; i++) if ((s[i] || 0) > (s[p] || 0)) p = i;
+  const thr = 0.25 * (s[p] || 0);
+  if (!(thr > 0)) return null;
+  let a = p;
+  let b = p;
+  while (a - 1 >= 0 && s[a - 1] > thr) a--;
+  while (b + 1 < s.length && s[b + 1] > thr) b++;
+  // Sub-frame edges by linear interpolation of the threshold crossings.
+  const fa = a > 0 ? (s[a] - thr) / (s[a] - s[a - 1]) : 0;
+  const fb = b < s.length - 1 ? (s[b] - thr) / (s[b] - s[b + 1]) : 0;
+  return { length: b - a + fa + fb, a, b };
+}
+
+function handTravel(frames, a, b, halfWindow) {
+  const tl = torsoLength(frames) || 1;
+  const avg = (c) => {
+    let x = 0;
+    let y = 0;
+    let n = 0;
+    for (let i = Math.max(0, c - halfWindow); i <= Math.min(frames.length - 1, c + halfWindow); i++) {
+      const h = midOf(frames[i], KP.LWrist, KP.RWrist);
+      if (h) {
+        x += h[0];
+        y += h[1];
+        n++;
+      }
+    }
+    return n ? [x / n, y / n] : null;
+  };
+  const pa = avg(a);
+  const pb = avg(b);
+  return pa && pb ? Math.hypot(pb[0] - pa[0], pb[1] - pa[1]) / tl : 0;
+}
 
 /**
- * Guess whether a clip that is supposed to be real time is actually slow
- * motion: even slow real swings move the hands at 5+ torso lengths per second
- * at their fastest, while a 4x replay of a fast swing peaks below 3.
- * Returns { peak, factor } where factor is 1 (looks real time) or a power of
- * two (2, 4, 8, 16). Only clear cases are flagged.
+ * The swing's own clock: frames per "swing second", measured from how long
+ * the hand burst lasts. A 4x slow-motion replay, a 240 fps clip and a slower
+ * youth swing all come out on the same time scale, so nobody has to enter a
+ * slow-motion factor and swings are compared tempo-free. Every time constant
+ * in the analysis (smoothing, windows, alignment rate) uses this unit.
+ *
+ * Several starting smoothing scales are tried and the self-consistent one
+ * whose burst moves the hands furthest wins (a keypoint-noise spike can be
+ * self-consistent too, but it doesn't go anywhere).
  */
-export function estimateSlowMotion(frames, fps) {
-  let peak = 0;
-  for (const v of handSpeedSeries(frames, fps)) if (Number.isFinite(v) && v > peak) peak = v;
-  if (!(peak > 0) || peak >= SLOWMO_SPEED_LIMIT) return { peak, factor: 1 };
-  const factor = clamp(2 ** Math.round(Math.log2(TYPICAL_HAND_SPEED / peak)), 2, 16);
-  return { peak, factor };
+export function estimateSwingFps(frames, fps) {
+  let best = null;
+  for (const k of [0.5, 1, 2, 4, 8, 16]) {
+    let est = fps * k;
+    let prev = est;
+    let burst = null;
+    for (let it = 0; it < 3; it++) {
+      burst = burstOf(frames, est);
+      if (!burst || !(burst.length > 0)) break;
+      prev = est;
+      est = burst.length / SWING_BURST_SEC;
+    }
+    if (!burst || !(burst.length > 0)) continue;
+    const ok = Math.abs(Math.log(est / prev)) < 0.25;
+    const travel = handTravel(frames, burst.a, burst.b, Math.max(1, Math.round(est * 0.02)));
+    if (!best || (ok && (!best.ok || travel > best.travel))) best = { est, ok, travel };
+  }
+  return best && Number.isFinite(best.est) ? clamp(best.est, 5, 5000) : fps;
 }
 
 /**

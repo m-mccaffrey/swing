@@ -2,7 +2,7 @@
 // swing-db/v1 entry.
 
 import { framesFromOpenPoseDocs, NUM_KP } from './core/body25.js';
-import { suggestStanceFrame, detectPitcherSide, canonicalize } from './core/sequence.js';
+import { suggestStanceFrame, detectPitcherSide, canonicalize, estimateSwingFps } from './core/sequence.js';
 import { detectPhases, PHASES, sanitizePhases } from './core/phases.js';
 import { makeEntry, validateEntry, entryFrames, saveLocalEntry, getLocalEntries, removeLocalEntry, slugify } from './core/db.js';
 import { getLandmarker, analyzeVideo, estimateVideoFps, seekVideo } from './pose/detector.js';
@@ -137,7 +137,6 @@ async function onEntry(file) {
     $('m-source').value = entry.source || '';
     $('m-notes').value = entry.notes || '';
     $('m-fps').value = String(entry.fps);
-    $('m-speed').value = String(entry.speedFactor || 1);
     st.video = null;
     const size = entry.image?.width ? { width: entry.image.width, height: entry.image.height } : imageSizeFromFrames(frames);
     setFrames({ frames, fps: entry.fps, ...size, stance: entry.stanceFrame, phases: entry.phases, pitcherSide: entry.orientation.pitcherSide });
@@ -166,8 +165,10 @@ function imageSizeFromFrames(frames) {
 
 // ------------------------------------------------------------ editing
 
+/** The swing's own clock (frames per swing-second); slow motion needs no setting. */
 function realFps() {
-  return st.fps * (Number($('m-speed').value) || 1);
+  if (!st.swingFps) st.swingFps = estimateSwingFps(st.frames, st.fps);
+  return st.swingFps;
 }
 
 function setFrames({ frames, times = null, fps, width, height, stance = null, phases = null, pitcherSide = null }) {
@@ -177,6 +178,7 @@ function setFrames({ frames, times = null, fps, width, height, stance = null, ph
   }
   st.frames = frames;
   st.fps = fps;
+  st.swingFps = null;
   st.times = times || frames.map((_, i) => i / fps);
   st.width = width;
   st.height = height;
@@ -277,7 +279,6 @@ function currentEntry() {
       notes: $('m-notes').value.trim(),
       source: $('m-source').value.trim(),
       fps: Number($('m-fps').value) || st.fps,
-      speedFactor: Number($('m-speed').value) || 1,
       width: st.width,
       height: st.height,
       pitcherSide: st.pitcherSide,
@@ -350,6 +351,7 @@ for (const id of ['m-name', 'm-id', 'm-bats']) $(id).addEventListener('input', u
 $('m-fps').addEventListener('change', () => {
   if (st.frames && !st.video) {
     st.fps = Number($('m-fps').value) || st.fps;
+    st.swingFps = null;
     st.times = st.frames.map((_, i) => i / st.fps);
   }
 });

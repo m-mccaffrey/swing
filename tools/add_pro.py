@@ -27,7 +27,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from swingdb.analysis import PHASE_KEYS, auto_detect, estimate_slow_motion  # noqa: E402
+from swingdb.analysis import PHASE_KEYS, auto_detect  # noqa: E402
 from swingdb.body25 import detection_coverage, track_hitter  # noqa: E402
 from swingdb.entry import make_entry, slugify, write_entry  # noqa: E402
 from swingdb.video import parse_time  # noqa: E402
@@ -53,14 +53,11 @@ def parse_args(argv=None):
     p.add_argument("--notes", default="")
     p.add_argument("--pitcher", choices=["left", "right"], help="side of the frame the pitcher is on (default: auto)")
     p.add_argument("--stance", type=float, help="stance time in seconds from the clip start (default: auto)")
-    p.add_argument("--speed", type=float, default=1.0,
-                   help="slow-motion factor of the footage (e.g. 4 for a 4x replay). Also skips frames automatically, see --ff")
-    p.add_argument("--ff", "--fast-forward", type=int, metavar="N",
-                   help="analyze every Nth frame (Nx fast-forward). Default: automatic from --speed so analysis runs at "
-                        "about --max-fps frames per real second, e.g. a 4x replay at 60 fps -> every 4th frame")
     p.add_argument("--target-x", type=float, help="hitter's rough horizontal position (0 = left edge, 1 = right) if several people are in frame")
     p.add_argument("--model", choices=["lite", "full", "heavy"], default="heavy", help="pose model (default: heavy, most accurate)")
-    p.add_argument("--max-fps", type=float, default=60, help="target frames per second of real time when skipping automatically (default 60)")
+    p.add_argument("--max-frames", type=int, default=240,
+                   help="analyze at most this many frames of the clip, skipping evenly (default 240). Slow-motion clips have "
+                        "far more frames than a swing needs; the swing's own clock keeps the comparison right either way")
     p.add_argument("--cookies-from-browser", help="pass browser cookies to yt-dlp if YouTube asks you to sign in (chrome, firefox, safari, ...)")
     p.add_argument("--keep-video", action="store_true", help="keep the downloaded clip (in .cache/previews/, not committed)")
     p.add_argument("--dry-run", action="store_true", help="analyze and make the preview, but don't write the database")
@@ -75,7 +72,10 @@ def need(module, pip_name):
         sys.exit(f"Missing Python package '{pip_name}'. Run: pip install -r tools/requirements.txt")
 
 
-def main(argv=None):
+def main(argv=None, *, thumb_height=None):
+    """Run the tool. With ``thumb_height`` every analyzed frame is also kept as
+    a JPEG at most that tall (``result["thumbs"]``), so the window can show
+    them for beat review without keeping the video."""
     args = parse_args(argv)
     need("cv2", "mediapipe")
     need("mediapipe", "mediapipe")
@@ -124,27 +124,26 @@ def main(argv=None):
                 source += f" ({start:.1f}-{end if end is not None else 'end'} s)"
 
         native_fps, width, height, count = video.probe(path)
-        step = video.frame_step(native_fps, args.speed, args.max_fps, args.ff)
-        fps = native_fps / step  # analyzed frames per second of video
-        real_fps = fps * args.speed  # ... per second of real time
-        slow = f", {args.speed:g}x slow motion" if args.speed != 1 else ""
-        print(f"Video: {width}x{height}, {native_fps:.0f} fps{slow}")
         clip_len = (read_end if read_end is not None else count / native_fps) - read_start
+        step = video.frame_step(clip_len * native_fps, args.max_frames)
+        fps = native_fps / step  # analyzed frames per second of video
+        print(f"Video: {width}x{height}, {native_fps:.0f} fps, {clip_len:.1f} s")
         frames_est = max(1, int(clip_len * fps))
         if step > 1:
-            print(f"Fast-forward {step}x: analyzing every {step}{'nd' if step == 2 else 'rd' if step == 3 else 'th'} frame "
-                  f"(~{frames_est} frames, {real_fps:.0f} per real second)")
+            print(f"Analyzing every {step}{'nd' if step == 2 else 'rd' if step == 3 else 'th'} frame (~{frames_est} frames; --max-frames {args.max_frames})")
         else:
-            print(f"Analyzing every frame (~{frames_est} frames, {real_fps:.0f} per real second)")
-        if real_fps < 30:
-            print(f"  warning: only {real_fps:.0f} frames per real second; fast swings may blur between frames. Try a smaller --ff.")
+            print(f"Analyzing every frame (~{frames_est} frames)")
 
         # 2. Pose in every frame.
         model = pose_mod.ensure_model(args.model, cache / "models")
         extractor = pose_mod.PoseExtractor(model)
-        people, t0 = [], time.time()
+        people, times, thumbs, thumb_scale, t0 = [], [], [], 1.0, time.time()
         for i, t, frame in video.read_frames(path, read_start, read_end, step):
             people.append(extractor.detect(frame, t))
+            times.append(t)
+            if thumb_height:
+                thumb_scale = min(1.0, thumb_height / frame.shape[0])
+                thumbs.append(preview.encode_thumb(frame, thumb_scale))
             if i % 15 == 0:
                 print(f"\r  pose: frame {i + 1}", end="", flush=True)
         extractor.close()
@@ -157,17 +156,15 @@ def main(argv=None):
             print(f"  warning: the hitter was found in only {coverage:.0%} of frames. "
                   "Try --target-x, a tighter time range, or a clearer side-view clip.")
 
-        if args.speed == 1:
-            peak, factor = estimate_slow_motion(frames, fps)
-            if factor > 1:
-                print(f"  warning: this clip looks like about {factor}x slow motion (peak hand speed {peak:.1f} "
-                      f"torso-lengths/s; real-time swings reach 5+). Timing in the entry will be wrong.\n"
-                      f"           Re-run with --speed {factor} (that also makes the analysis ~{factor}x faster).")
-
         # 3. Pitcher side, stance, phases.
         stance = None if args.stance is None else max(0, min(len(frames) - 1, round(args.stance * fps)))
-        det = auto_detect(frames, real_fps, stance_index=stance, pitcher_side=args.pitcher)
+        det = auto_detect(frames, fps, stance_index=stance, pitcher_side=args.pitcher)
         phases = det["phases"]
+        swing_fps = det["swingFps"]
+        print(f"Swing clock: {swing_fps / fps:.2f}x the video's frame rate"
+              + (" (slow motion or a slow swing; handled automatically)" if swing_fps > 1.6 * fps else ""))
+        if swing_fps < 24:
+            print(f"  warning: only about {swing_fps:.0f} frames cover each swing-second; raise --max-frames for a finer look at contact.")
         side_note = "given" if args.pitcher else f"auto, {det['sideConfidence']:.0%} confident"
         print(f"Pitcher side: {det['pitcherSide']} ({side_note})")
         for k in PHASE_KEYS:
@@ -189,7 +186,7 @@ def main(argv=None):
         # 5. Database entry.
         entry = make_entry(
             id=entry_id, name=args.name, team=args.team, bats=args.bats, notes=args.notes, source=source,
-            fps=fps, speed_factor=args.speed, width=width, height=height, pitcher_side=det["pitcherSide"],
+            fps=fps, width=width, height=height, pitcher_side=det["pitcherSide"],
             stance_frame=phases["stance"], phases=phases, frames=frames, clip=clip,
         )
         out = None
@@ -201,12 +198,15 @@ def main(argv=None):
             print("Check it: open the preview, or load the file in builder.html (Existing database entry).")
             print("Then: git add data/pros && git commit -m 'Add <player>' && git push")
 
+        video_path = Path(path) if not args.url else None
         if args.keep_video and args.url:
-            kept = cache / "previews" / f"{entry_id}{Path(path).suffix}"
-            os.replace(path, kept)
-            print(f"Kept clip: {kept}")
-        return {"entry": out, "preview": preview_path, "id": entry_id, "phases": phases,
-                "pitcherSide": det["pitcherSide"], "fps": fps}
+            video_path = cache / "previews" / f"{entry_id}{Path(path).suffix}"
+            os.replace(path, video_path)
+            print(f"Kept clip: {video_path}")
+        return {"entry": out, "entryData": entry, "preview": preview_path, "id": entry_id, "phases": phases,
+                "pitcherSide": det["pitcherSide"], "fps": fps, "swingFps": swing_fps, "frames": frames,
+                "times": times, "clipStart": read_start, "video": video_path, "title": title, "db": args.db,
+                "thumbs": thumbs, "thumbScale": thumb_scale}
     finally:
         for f in work.glob("*"):
             f.unlink(missing_ok=True)

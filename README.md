@@ -5,10 +5,11 @@ Compare your baseball swing to MLB swings, in the browser.
 1. Upload a **side-view** video of your swing (camera at 90° to the pitch path).
 2. Pose estimation runs locally (MediaPipe Pose Landmarker). The landmarks are converted to the **OpenPose BODY_25** format.
 3. Pick the frame with your **starting stance**. It is matched against every pro stance in the database, and the closest one is your match.
-4. The rest of your swing is aligned with the pro's using dynamic time warping. Load, foot plant, contact, extension and finish are located, and about 30 checks produce phase-by-phase **feedback**: stride, head movement, hand load, front-leg brace, spine tilt, hip and shoulder turn, contact point, extension, finish, and timing.
+4. The rest of your swing is lined up with the pro's at six **beats**: stance, load, foot plant, contact, extension and finish. Time is stretched between them, so a slower or quicker swing, a different frame rate or slow motion all compare the same. About 28 checks then produce phase-by-phase **feedback** on positions: stride, head movement, hand load, front-leg brace, spine tilt, hip and shoulder turn, contact point, extension and finish.
 
 - **Click any piece of advice** (feedback row, priority card, "matches" pill or table row). The player jumps to the exact pair of frames that check compared, rings the joints it measured, and draws the stance position with an arrow for movements measured from the stance. You can check that every claim is grounded in the poses.
-- **Saved swings:** every analyzed swing is kept in the browser's IndexedDB: poses, stance pick, pitcher side, height and, if there is room, the video. Reopening one goes straight to the results with no upload and no re-analysis.
+- **Adjust the beats.** The beats are detected automatically, and detection can miss. Click a beat chip under the video (or pick it in the beat editor), find the right frame, and press **Set to the frame shown**. The comparison and feedback update right away, and the edited beats are saved with the swing.
+- **Saved swings:** every analyzed swing is kept in the browser's IndexedDB: poses, stance pick, pitcher side, height, adjusted beats and, if there is room, the video. Reopening one goes straight to the results with no upload and no re-analysis.
 
 Videos never leave the device. The site is plain static files (no build step to run it), deployed to GitHub Pages by a workflow.
 
@@ -33,7 +34,7 @@ If you use "Deploy from a branch" instead, the app still works. It loads MediaPi
 
 - **Camera perpendicular to the pitch path.** Put it on the open side facing the hitter's chest, or behind the hitter's back; both work. The pitcher should be off to the left or right of the frame. The app detects which side; you can override it.
 - Whole body in frame for the entire swing, camera still, one person in view.
-- 60 fps or phone slow motion if possible. Set the slow-motion factor so timing is correct.
+- Any frame rate works, including phone slow motion, and there is nothing to set: the swing is timed by its own hand speed. 60 fps or slow motion gives a sharper look at contact.
 
 ## How it works
 
@@ -41,9 +42,10 @@ If you use "Deploy from a branch" instead, the app still works. It loads MediaPi
 | --- | --- |
 | MediaPipe 33 landmarks → BODY_25 (Neck = shoulder midpoint, MidHip = hip midpoint, heels/toes mapped) | `src/core/body25.js` |
 | Canonicalization: flip so the pitcher is to the right, relabel joints as **front/back** side (so left- and right-handed hitters, chest-view and back-view videos all compare directly), repair left/right label flicker, fill gaps, smooth, then normalize to the stance MidHip and **torso length** | `src/core/sequence.js` |
+| Swing clock: the hands' fast burst (speed above 25% of its peak) lasts a fixed 0.586 *swing-seconds*, which gives the frames per swing-second for every time window in the analysis. Frame rate, slow motion and tempo need no input | `src/core/sequence.js` (`estimateSwingFps`) |
 | Metrics a side camera can see: stance width, weight shift, head drift/drop, hand position and path, stride, apparent knee and elbow angles, spine tilt, back-shoulder drop, hip and shoulder turn (estimated from how much the hips and shoulders narrow) | `src/core/metrics.js` |
 | Stance similarity: weighted RMS joint distance between normalized stances | `src/core/match.js` |
-| Swing alignment: open-ended DTW on movement-from-stance features at 60 fps real time, phase transfer, then local refinement of events (peak hand speed, foot landing, leg-kick peak) calibrated against the pro | `src/core/dtw.js`, `src/core/compare.js`, `src/core/phases.js` |
+| Beats: open-ended DTW on movement-from-stance features proposes the user's beats from the pro's, then local refinement places them (hand-speed peak, foot landing, leg-kick peak). Comparison: time is stretched linearly between the six beats (yours, as detected or adjusted) | `src/core/dtw.js`, `src/core/compare.js`, `src/core/phases.js` |
 | Feedback rules, tolerances, tips and drills | `src/core/feedback.js` |
 | Procedural swing generator (placeholders, demo, tests) | `src/core/synth.js` |
 
@@ -51,19 +53,20 @@ Lengths are measured in torso lengths and shown in inches using the height you e
 
 ### Accuracy: the normalization sweep
 
-`docs/normalization-sweep.md` (regenerate with `npm run sweep`) renders the *same* swing under 44 recording conditions (plus 4 deliberate swing changes) and checks that the comparison still says "identical". Conditions include framing, 480p to 4K, portrait, filmed from behind, left-handers, 1.5–2.0 m hitters, child proportions, 24–240 fps, 4×/8× slow motion, long lead-ins, stance picked early or late, keypoint jitter, dropouts, label flicker, camera tilt, off-axis and perspective cameras, a different pose model, and pros recorded differently. It also checks that real differences (longer stride, lower hands, slower swing, less hip turn) are caught by the right check and nothing else. The same conditions run as tests on every push.
+`docs/normalization-sweep.md` (regenerate with `npm run sweep`) renders the *same* swing under 45 recording conditions (plus 3 deliberate swing changes) and checks that the comparison still says "identical". Conditions include framing, 480p to 4K, portrait, filmed from behind, left-handers, 1.5–2.0 m hitters, child proportions, 24–240 fps, 4×/8×/16× slow motion with nothing entered, swings 20–25% slower or quicker, long lead-ins, stance picked early or late, keypoint jitter, dropouts, label flicker, camera tilt, off-axis and perspective cameras, a different pose model, and pros recorded differently. It also checks that real differences (longer stride, lower hands, less hip turn) are caught by the right check and nothing else. The same conditions run as tests on every push.
 
 Built-in corrections the sweep relies on:
 - Camera tilt is leveled from the ground line under the feet.
 - The pro is rescaled to the hitter's limb proportions.
-- Slow motion that wasn't set is detected from hand speed. The app offers a one-click fix; the Python tool prints a warning.
-- Contact timing is robust to keypoint jitter.
+- Each swing runs on its own clock, measured from its hand-speed burst, so slow motion and frame rate need no input.
+- Contact placement is robust to keypoint jitter.
 
 ### Limitations
 
 - Keep the camera within about 10° of perpendicular to the pitch path. Further off-axis (the sweep tests 25°), the 2D picture changes in ways one camera can't undo.
 - A single side camera sees the swing in 2D. Rotation and joint angles are *apparent* values in the camera plane. They are most meaningful when you compare against pros filmed from the same kind of view.
 - MediaPipe and OpenPose place some keypoints slightly differently (for example the hips and the neck). For the most consistent comparisons, build pro entries with the in-app builder, which uses the same pose model as user swings.
+- Tempo and rhythm are not judged. Time is stretched to line up the beats, so the feedback is about positions at each moment of the swing.
 - The feedback is a comparison with one pro, not an absolute grade. Different good hitters do things differently. Use the ranking to pick a comparison that suits you.
 
 ## Adding pro swings
@@ -81,23 +84,21 @@ python tools/add_pro.py "https://www.youtube.com/watch?v=VIDEO_ID" \
 git add data/pros && git commit -m "Add Player Name" && git push
 ```
 
-Prefer a window? Run `python tools/add_pro_gui.py`. It's the same tool with a form: paste the link or pick a file, fill in the player, set the speed and press **Analyze and add to database**. It shows the log and the preview of the six phase frames, and gives you buttons to open the database folder and copy the git commands. It needs Tkinter, which comes with Python from python.org; with Homebrew run `brew install python-tk`, on Debian/Ubuntu `sudo apt install python3-tk`.
+Prefer a window? Run `python tools/add_pro_gui.py`. It's the same tool with a form: paste the link or pick a file, fill in the player and press **Analyze**. The **Beats** tab then shows every analyzed frame with the skeleton drawn on. Drag the bar or use ← → to find each beat, press **Set**, then **Add to database**. Changing a beat later and saving again updates the entry. There are also tabs for the six-frame contact sheet and the log, and buttons to open the database folder and copy the git commands. It needs Tkinter, which comes with Python from python.org; with Homebrew run `brew install python-tk`, on Debian/Ubuntu `sudo apt install python3-tk`.
 
 What it does:
 
-1. Downloads only that time range, video only (the whole video if ffmpeg isn't installed). It uses H.264 at up to 1080p and the highest frame rate available.
+1. Downloads only that time range, video only (the whole video if ffmpeg isn't installed). It uses H.264 at up to 1080p and the highest frame rate available. Slow-motion replays are fine as they are. Long or slow-motion clips are thinned evenly to at most 240 analyzed frames (`--max-frames`).
 2. Finds the hitter's pose in every frame with MediaPipe, the same model the web app uses, and converts it to OpenPose BODY_25. If several people are in the frame (catcher, umpire), it locks on to the most prominent one. Pass `--target-x 0.3` to point at the hitter instead: 0 is the left edge of the frame, 1 the right.
-3. Auto-detects the pitcher side, stance and phases. The logic is the same as in the browser; `tools/tests` checks the Python port against the JavaScript.
+3. Measures the swing clock, then auto-detects the pitcher side, stance and beats. The logic is the same as in the browser; `tools/tests` checks the Python port against the JavaScript.
 4. Writes `data/pros/<id>.json`, adds it to `index.json` and deletes the video. Only keypoints are kept, plus the source URL and timestamps in the entry's `clip` field.
-5. Saves a preview of the six phase frames with the skeleton drawn on to `.cache/previews/<id>.jpg` (not committed). Check it. If a phase is off, load the entry in `builder.html` (**Existing database entry**), fix it, and download the corrected file over the original.
+5. Saves a preview of the six beat frames with the skeleton drawn on to `.cache/previews/<id>.jpg` (not committed). Check it. If a beat is off, fix it in the window (`add_pro_gui.py`), or load the entry in `builder.html` (**Existing database entry**), fix it there and download the corrected file over the original.
 
 Useful options:
 
 | Option | Use |
 | --- | --- |
-| `--speed 4` | the clip is a 4× slow-motion replay (common on YouTube and broadcasts). Fixes timing and also fast-forwards automatically: frames are skipped so analysis runs at about 60 frames per *real* second (a 4× replay at 60 fps → every 4th frame, so 4× faster) |
-| `--ff N` | fast-forward by hand: analyze every Nth frame (`--ff 2` = 2× faster). Overrides the automatic choice; warns if fewer than 30 frames per real second are left |
-| `--max-fps 120` | change the automatic target (frames per real second; default 60) |
+| `--max-frames 480` | analyze up to this many frames (default 240; `0` = every frame). Clips with more frames are thinned evenly. Raise it for a finer look at contact in a long slow-motion clip |
 | `--pitcher left` / `--pitcher right` | override the auto-detected pitcher side |
 | `--stance 0.4` | stance moment, in seconds from the clip start |
 | `--file swing.mp4` | use a local video instead of a URL |
@@ -123,7 +124,7 @@ Pick clips filmed from the side, perpendicular to the pitch path, with the hitte
 ```sh
 openpose.bin --video swing.mp4 --write_json out/ --display 0 --render_pose 0
 node scripts/openpose-to-db.mjs out/ --name "Player Name" --fps 60 --bats R --team "Team"
-# optional: --pitcher right|left --stance <frame> --speed <slow-mo factor> --source <url>
+# optional: --pitcher right|left --stance <frame> --source <url>
 ```
 
 This writes `data/pros/<id>.json` and registers it in the index. When a frame has several people (catcher, umpire), the script locks on to the most prominent person in the first frame and follows them.
@@ -140,8 +141,7 @@ Only add footage you have the rights to use, and record the source in the entry.
   "team": "Team",
   "bats": "R",                       // R, L or S
   "keypointFormat": "BODY_25",
-  "fps": 60,                         // frames per second of the source video
-  "speedFactor": 1,                  // 4 if the source was 4× slow motion
+  "fps": 60,                         // frames per second of the source video (slow motion needs nothing extra)
   "image": { "width": 1280, "height": 720 },
   "orientation": { "pitcherSide": "right" },
   "stanceFrame": 12,
@@ -150,7 +150,7 @@ Only add footage you have the rights to use, and record the source in the entry.
 }
 ```
 
-`frames` may also contain raw OpenPose per-frame documents (`{ "people": [...] }`) or bare keypoint arrays. COCO-18 keypoints are converted automatically. `phases` is optional and is auto-detected if missing. The same format is produced by **Download my pose data** on the Analyze page.
+`frames` may also contain raw OpenPose per-frame documents (`{ "people": [...] }`) or bare keypoint arrays. COCO-18 keypoints are converted automatically. `phases` (the six beats) is optional and is auto-detected if missing. Older entries with a `speedFactor` field still load; the field is ignored. The same format is produced by **Download my pose data** on the Analyze page.
 
 ## Development
 

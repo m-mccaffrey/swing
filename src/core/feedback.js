@@ -11,8 +11,8 @@ import { argMax } from './math.js';
 export const TORSO_TO_HEIGHT = 0.28;
 
 function at(S, key, phase) {
-  let r = Math.max(0, Math.round(S.realFps / 60));
-  if (phase === 'stance') r = Math.max(r, stanceHalfWindow(S.realFps));
+  let r = Math.max(0, Math.round(S.swingFps / 60));
+  if (phase === 'stance') r = Math.max(r, stanceHalfWindow(S.swingFps));
   return valueAt(S.series[key], S.phases[phase], r);
 }
 
@@ -271,25 +271,6 @@ export const RULES = [
     lessTip: 'Let the back shoulder come all the way through so your chest faces the pitcher at the finish.',
     good: 'Your finish rotation matches {pro}.',
   },
-  // ---------------- Timing ----------------
-  {
-    id: 'timing.stride', phase: 'footPlant', label: 'Stride timing (load → foot plant)', unit: 'sec', relTol: 0.25, weight: 0.8, timing: true,
-    get: (S) => (S.phases.footPlant - S.phases.load) / S.realFps,
-    more: 'Your stride (load to foot plant) is slower than {pro}’s.',
-    moreTip: 'A slow stride is fine if you start early. Use it to time the pitcher.',
-    less: 'Your stride (load to foot plant) is quicker than {pro}’s.',
-    lessTip: 'A quick stride can rush you. Try a slower, controlled gather.',
-    good: 'Your stride timing matches {pro}.',
-  },
-  {
-    id: 'timing.swing', phase: 'contact', label: 'Swing time (foot plant → contact)', unit: 'sec', relTol: 0.2, weight: 1.2, timing: true,
-    get: (S) => (S.phases.contact - S.phases.footPlant) / S.realFps,
-    more: 'It takes you longer to get from foot plant to contact than {pro}.',
-    moreTip: 'Shorten the path and let the hips start the swing. Connection and bat-speed drills help (overload/underload bats, short-bat drill).',
-    less: 'You get from foot plant to contact faster than {pro}.',
-    lessTip: 'Quick to the ball. Keep it up.',
-    good: 'Your swing time matches {pro}.',
-  },
 ];
 
 /**
@@ -329,8 +310,6 @@ export const EVIDENCE = {
   'finish.balance': { joints: [C.nose, ...ANKLES] },
   'finish.hands': { joints: [...HANDS, C.neck] },
   'finish.rotation': { joints: [C.fShoulder, C.bShoulder], pair: true },
-  'timing.stride': { joints: [C.fAnkle] },
-  'timing.swing': { joints: HANDS },
 };
 
 function evidenceFor(id, phase, user, pro) {
@@ -386,14 +365,15 @@ function sequenceItem(user, pro, proName) {
 
 /**
  * Evaluate every rule.
- * @param {{series:object, phases:object, realFps:number}} user swing (phases from the alignment)
- * @param {{series:object, phases:object, realFps:number}} pro
- * @param {{proName:string, timingKnown?:boolean}} opts
+ * Swings are compared tempo-free (each on its own swing clock), so there are
+ * no timing checks: only body positions at matching beats.
+ * @param {{series:object, phases:object, swingFps:number}} user swing (beats from the alignment)
+ * @param {{series:object, phases:object, swingFps:number}} pro
+ * @param {{proName:string}} opts
  */
-export function evaluateFeedback(user, pro, { proName, timingKnown = true } = {}) {
+export function evaluateFeedback(user, pro, { proName } = {}) {
   const items = [];
   for (const rule of RULES) {
-    if (rule.timing && !timingKnown) continue;
     const u = rule.get(user);
     const p = rule.get(pro);
     if (!Number.isFinite(u) || !Number.isFinite(p)) continue;

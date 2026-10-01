@@ -63,7 +63,6 @@ test('demo swing: feedback finds the flaws that were built into it', () => {
   flagged('contact.head', +1); // head drifts toward the pitcher
   flagged('contact.tilt', +1); // not staying behind the ball
   flagged('contact.shoulders', +1); // shoulders open early
-  flagged('timing.swing', +1); // slower from plant to contact
   flagged('load.legLift', -1); // smaller leg lift
   assert.equal(byId['contact.sequence'].severity, 'major');
   const s = summarize(items);
@@ -88,4 +87,25 @@ test('every feedback item carries evidence: measured joints and in-range frames'
   const leg = items.find((i) => i.id === 'load.legLift');
   const lift = pro.series.frontFootLift;
   assert.equal(lift[leg.evidence.proFrame], Math.max(...lift.slice(pro.phases.stance, pro.phases.footPlant + 1).filter(Number.isFinite)));
+});
+
+test('hand-set beats are used as given, and the automatic beats stay available', () => {
+  const { user } = demoPrep();
+  const pro = proPrep('synthetic-a');
+  const auto = compareSwing(user, pro);
+  assert.deepEqual(auto.autoPhases, auto.phases);
+  const beats = { ...auto.phases, contact: auto.phases.contact - 2, finish: auto.phases.finish + 3 };
+  const fixed = compareSwing(user, pro, { phases: beats });
+  assert.deepEqual(fixed.phases, beats);
+  assert.deepEqual(fixed.autoPhases, auto.phases);
+  // The contact segments are anchored at the moved beat: the pro's contact frame maps to it.
+  assert.equal(fixed.userToProOrig(beats.contact), pro.phases.contact);
+  assert.notEqual(fixed.swingScore, auto.swingScore);
+  // Beats are kept in order and inside the clip whatever comes in.
+  const messy = compareSwing(user, pro, { phases: { ...beats, load: beats.footPlant + 5, finish: 1e6 } });
+  let last = -1;
+  for (const k of PHASE_KEYS) {
+    assert.ok(messy.phases[k] >= last && messy.phases[k] < user.canon.length, `${k}: ${messy.phases[k]}`);
+    last = messy.phases[k];
+  }
 });

@@ -6,7 +6,6 @@
 //   "id": "unique-id", "name": "Player Name", "team": "...", "bats": "R" | "L",
 //   "keypointFormat": "BODY_25",
 //   "fps": 60,                       // frames per second of the video
-//   "speedFactor": 1,                // >1 if the source was slow motion
 //   "image": { "width": 1280, "height": 720 },
 //   "orientation": { "pitcherSide": "right" | "left" },
 //   "stanceFrame": 12,
@@ -65,7 +64,6 @@ export function prepareEntry(entry) {
   const prep = prepareSwing({
     frames,
     fps: entry.fps,
-    speedFactor: entry.speedFactor || 1,
     stanceIndex: entry.stanceFrame,
     pitcherSide: entry.orientation.pitcherSide,
     phases: entry.phases || null,
@@ -170,7 +168,7 @@ export function removeLocalEntry(id) {
 }
 
 /** Build a database entry from analyzed frames (used by the builder and exports). */
-export function makeEntry({ id, name, team = '', bats = '', notes = '', source = '', fps, speedFactor = 1, width, height, pitcherSide, stanceFrame, phases, frames }) {
+export function makeEntry({ id, name, team = '', bats = '', notes = '', source = '', fps, width, height, pitcherSide, stanceFrame, phases, frames }) {
   const round = (v) => Math.round(v * 100) / 100;
   return {
     schema: SCHEMA,
@@ -182,7 +180,6 @@ export function makeEntry({ id, name, team = '', bats = '', notes = '', source =
     source,
     keypointFormat: 'BODY_25',
     fps,
-    speedFactor,
     image: width && height ? { width, height } : undefined,
     orientation: { pitcherSide },
     stanceFrame,
