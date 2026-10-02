@@ -120,3 +120,16 @@ test('beats give the swing clock when the hands could not time the swing', async
   assert.equal(pickSwingFps(8, slow), swingFpsFromBeats(slow)); // hands lost: trust the beats
   assert.equal(pickSwingFps(62, null), 62);
 });
+
+test('the fitted pro stands on the user\'s ground, whatever the proportions', async () => {
+  const { renderCase, scaleLimbs, referencePro } = await import('../scripts/lib/sweep.mjs');
+  const { lowestFoot } = await import('../src/core/compare.js');
+  const cs = renderCase({ post: (f) => scaleLimbs(f, { legs: 0.8, arms: 0.9 }) });
+  const user = prepareSwing({ frames: cs.frames, fps: cs.fps, stanceIndex: cs.truePhases.stance, pitcherSide: cs.trueSide });
+  const pro = referencePro().prep;
+  const c = compareSwing(user, pro);
+  const ground = lowestFoot(user.canon[user.stanceIndex]);
+  for (let j = pro.stanceIndex; j <= pro.phases.finish; j++) {
+    assert.ok(Math.abs(lowestFoot(c.proFit[j]) - ground) < 0.02, `pro frame ${j}: ${(lowestFoot(c.proFit[j]) - ground).toFixed(3)} TL off the ground`);
+  }
+});

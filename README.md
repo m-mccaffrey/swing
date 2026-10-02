@@ -51,7 +51,7 @@ If you use "Deploy from a branch" instead, the app still works. It loads MediaPi
 | Feedback rules, tolerances, tips and drills | `src/core/feedback.js` |
 | Procedural swing generator (placeholders, demo, tests) | `src/core/synth.js` |
 
-Lengths are measured in torso lengths and shown in inches using the height you enter. Pro values are shown scaled to your size.
+Lengths are measured in torso lengths and shown in inches using the height you enter. Pro values are shown scaled to your size. The pro's ghost is redrawn with your limb proportions and stands on your ground line: each frame it is placed so its lowest foot point touches the ground under your stance, so its hip and head height come from its own leg bend at your leg lengths. If you dip and the pro doesn't, your head drops below theirs.
 
 ### Accuracy: the normalization sweep
 

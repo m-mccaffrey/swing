@@ -4,7 +4,7 @@
 import { loadDatabase, makeEntry } from './core/db.js';
 import { prepareSwing, compareSwing } from './core/compare.js';
 import { detectPitcherSide, suggestStanceFrame, canonToImage, detectionCoverage, estimateSwingFps } from './core/sequence.js';
-import { rankStances, rescaleBones } from './core/match.js';
+import { rankStances } from './core/match.js';
 import { evaluateFeedback, summarize, formatValue, formatDelta, TORSO_TO_HEIGHT } from './core/feedback.js';
 import { PHASES, phaseLabel, pickSwingFps } from './core/phases.js';
 import { demoUserSwing } from './core/synth.js';
@@ -379,16 +379,15 @@ function reopenStance() {
   showStanceFrame(state.stanceIndex);
 }
 
-/** Pro frame redrawn with the user's limb proportions (see rescaleBones()). */
-function fitPro(f) {
-  return rescaleBones(f, state.comparison?.proScales);
+/** Pro frame j fitted to the user's proportions and standing on the user's ground. */
+function proAt(j) {
+  return state.comparison.proFit[j];
 }
 
 function selectPro(pro) {
   state.evidence = null;
   $('evidence-note').hidden = true;
   state.pro = pro;
-  state.proFitted = null;
   runComparison();
   renderResults();
 }
@@ -454,7 +453,7 @@ function renderRanking() {
 function renderStanceCanvas() {
   const canvas = $('stance-canvas');
   const u = state.user.canon[state.user.stanceIndex];
-  const p = fitPro(state.pro.prep.canon[state.pro.prep.stanceIndex]);
+  const p = proAt(state.pro.prep.stanceIndex);
   const w = canvas.clientWidth || 480;
   const h = canvas.clientHeight || 360;
   const ctx = fitCanvas(canvas, w, h);
@@ -748,12 +747,12 @@ function drawResultFrame(i) {
   const userColor = cssVar('--series-user', '#2a78d6');
   const showGhost = ghostOn && (i >= user.stanceIndex || evidenceHere);
   stages.result.draw((ctx, map, u) => {
-    if (showGhost) drawSkeleton(ctx, toImg(fitPro(pro.canon[j])), { map, color: proColor, lineWidth: 3 * u, radius: 0, alpha: 0.85, outline: 'rgba(0,0,0,0.35)' });
+    if (showGhost) drawSkeleton(ctx, toImg(proAt(j)), { map, color: proColor, lineWidth: 3 * u, radius: 0, alpha: 0.85, outline: 'rgba(0,0,0,0.35)' });
     drawSkeleton(ctx, toImg(user.canon[i]), { map, lineWidth: 3 * u, radius: 3 * u, outline: 'rgba(0,0,0,0.45)', hollowBelow: 0.3 });
     if ($('raw-toggle').checked) drawPoints(ctx, a.frames[i], { map, radius: 2.5 * u });
     if (evidenceHere) {
       const o = { pair: ev.pair, scale: u };
-      if (showGhost) drawHighlights(ctx, map, toImg(fitPro(pro.canon[j])), ev.joints, proColor, { ...o, stanceFrame: ev.fromStance ? toImg(fitPro(pro.canon[ev.proStance])) : null });
+      if (showGhost) drawHighlights(ctx, map, toImg(proAt(j)), ev.joints, proColor, { ...o, stanceFrame: ev.fromStance ? toImg(proAt(ev.proStance)) : null });
       drawHighlights(ctx, map, toImg(user.canon[i]), ev.joints, userColor, { ...o, stanceFrame: ev.fromStance ? toImg(user.canon[ev.userStance]) : null });
     }
   });
@@ -764,23 +763,23 @@ function drawResultFrame(i) {
   if (!state.sceneBounds) {
     state.sceneBounds = canonicalBounds([
       user.canon.slice(user.stanceIndex, c.endUserIndex + 1),
-      pro.canon.slice(pro.stanceIndex, pro.phases.finish + 1),
+      c.proFit.slice(pro.stanceIndex, pro.phases.finish + 1),
     ]);
   }
-  const proFrame = fitPro(i >= user.stanceIndex || evidenceHere ? pro.canon[j] : pro.canon[pro.stanceIndex]);
+  const proFrame = proAt(i >= user.stanceIndex || evidenceHere ? j : pro.stanceIndex);
   const smap = drawScene(ctx, w, h, {
     bounds: state.sceneBounds,
     user: user.canon[i],
     pro: proFrame,
     userTrail: evidenceHere ? null : { frames: user.canon, from: user.stanceIndex, to: c.endUserIndex },
-    proTrail: evidenceHere ? null : { frames: (state.proFitted ||= pro.canon.map(fitPro)), from: pro.stanceIndex, to: pro.phases.finish },
+    proTrail: evidenceHere ? null : { frames: c.proFit, from: pro.stanceIndex, to: pro.phases.finish },
     caption: evidenceHere
       ? `${state.evidence.label} · ${phaseLabel(state.evidence.phase)}`
       : `${cur ? phaseLabel(cur) : 'Before stance'} · ${fmtTime(a.times[i])}`,
   });
   if (evidenceHere) {
     const o = { pair: ev.pair };
-    drawHighlights(ctx, smap, proFrame, ev.joints, proColor, { ...o, stanceFrame: ev.fromStance ? fitPro(pro.canon[ev.proStance]) : null });
+    drawHighlights(ctx, smap, proFrame, ev.joints, proColor, { ...o, stanceFrame: ev.fromStance ? proAt(ev.proStance) : null });
     drawHighlights(ctx, smap, user.canon[i], ev.joints, userColor, { ...o, stanceFrame: ev.fromStance ? user.canon[ev.userStance] : null });
   }
 }

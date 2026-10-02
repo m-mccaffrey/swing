@@ -12,6 +12,7 @@ import { canonicalize, resampleFrames, estimateSwingFps } from './sequence.js';
 import { computeSeries, stanceHalfWindow } from './metrics.js';
 import { detectPhases, sanitizePhases, refinePhases, PHASE_KEYS, pickSwingFps } from './phases.js';
 import { dtw, pathMaps } from './dtw.js';
+import { gaussianSmooth, fillGaps, median } from './math.js';
 import { stancePose, poseDistance, similarityFromDistance, proportionScales, rescaleBones } from './match.js';
 
 /** Swing-clock rate both swings are resampled to when proposing beats. */
@@ -192,6 +193,44 @@ export function proposeBeats(user, pro, proFit) {
   return { aligned, refined: refinePhases(user, aligned, pro), cost };
 }
 
+// Foot points that touch the ground (small toes are too unreliable).
+const FEET = [KP.LAnkle, KP.RAnkle, KP.LHeel, KP.RHeel, KP.LBigToe, KP.RBigToe];
+const GROUND_SMOOTH_SEC = 0.03;
+
+/** Height (canonical y, up) of a frame's lowest foot point, or NaN. */
+export function lowestFoot(f) {
+  let y = Infinity;
+  for (const j of FEET) if (f[j * 3 + 2] > 0.05) y = Math.min(y, f[j * 3 + 1]);
+  return Number.isFinite(y) ? y : NaN;
+}
+
+/**
+ * Stand fitted pro frames on the user's ground: shift each frame vertically
+ * so its lowest foot point sits at `groundY`. One foot is always down in a
+ * swing (the back foot during the leg kick, the front foot after the plant),
+ * so the pro's hip and head height come from their own leg bend at the
+ * user's leg lengths, instead of the hips following the pro's clip while the
+ * rescaled legs sink below the floor or float above it.
+ */
+export function standOnGround(frames, groundY, fps) {
+  if (!Number.isFinite(groundY)) return frames;
+  const shift = gaussianSmooth(fillGaps(frames.map((f) => groundY - lowestFoot(f))), GROUND_SMOOTH_SEC * fps);
+  return frames.map((f, i) => {
+    if (!Number.isFinite(shift[i])) return f;
+    const g = f.slice();
+    for (let j = 0; j < NUM_KP; j++) if (g[j * 3 + 2] > 0) g[j * 3 + 1] += shift[i];
+    return g;
+  });
+}
+
+/** The user's ground level at the stance (canonical y). */
+function stanceGround(prep) {
+  const h = stanceHalfWindow(prep.swingFps);
+  const ys = [];
+  for (let i = Math.max(0, prep.stanceIndex - h); i <= Math.min(prep.canon.length - 1, prep.stanceIndex + h); i++) ys.push(lowestFoot(prep.canon[i]));
+  return median(ys);
+}
+
 /**
  * Compare a prepared user swing with a prepared pro swing.
  * @param {object} user from prepareSwing()
@@ -202,7 +241,8 @@ export function proposeBeats(user, pro, proFit) {
 export function compareSwing(user, pro, { phases: fixed = null } = {}) {
   // Give the pro the user's limb proportions so body shape, not build, is compared.
   const scales = proportionScales(pro.stancePose, user.stancePose);
-  const proFit = pro.canon.map((f) => rescaleBones(f, scales));
+  // ...and stand them on the user's ground.
+  const proFit = standOnGround(pro.canon.map((f) => rescaleBones(f, scales)), stanceGround(user), pro.swingFps);
 
   // The automatic beats are always proposed, so hand-set ones can be shown against them.
   const proposal = proposeBeats(user, pro, proFit);
@@ -275,6 +315,8 @@ export function compareSwing(user, pro, { phases: fixed = null } = {}) {
     autoPhases: proposal.refined,
     alignedPhases: proposal.aligned,
     proScales: scales,
+    // The pro fitted to the user's proportions and ground, frame by frame (for drawing).
+    proFit,
     segments,
     swingScore: ss / ws,
     alignCost: proposal.cost,
