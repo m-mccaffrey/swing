@@ -35,6 +35,7 @@ If you use "Deploy from a branch" instead, the app still works. It loads MediaPi
 - **Camera perpendicular to the pitch path.** Put it on the open side facing the hitter's chest, or behind the hitter's back; both work. The pitcher should be off to the left or right of the frame. The app detects which side; you can override it.
 - Whole body in frame for the entire swing, camera still, one person in view.
 - Any frame rate works, including phone slow motion, and there is nothing to set: the swing is timed by its own hand speed. 60 fps or slow motion gives a sharper look at contact.
+- **Sharp hands.** Film in bright light (daylight is best) or in slow-motion mode. Both use a short exposure, which freezes the hands. In dim light the hands smear into a blur at launch and the pose model has to guess where they are.
 
 ## How it works
 
@@ -43,6 +44,7 @@ If you use "Deploy from a branch" instead, the app still works. It loads MediaPi
 | MediaPipe 33 landmarks → BODY_25 (Neck = shoulder midpoint, MidHip = hip midpoint, heels/toes mapped) | `src/core/body25.js` |
 | Canonicalization: flip so the pitcher is to the right, relabel joints as **front/back** side (so left- and right-handed hitters, chest-view and back-view videos all compare directly), repair left/right label flicker, fill gaps, smooth, then normalize to the stance MidHip and **torso length** | `src/core/sequence.js` |
 | Swing clock: the hands' fast burst (speed above 25% of its peak) lasts a fixed 0.586 *swing-seconds*, which gives the frames per swing-second for every time window in the analysis. Frame rate, slow motion and tempo need no input | `src/core/sequence.js` (`estimateSwingFps`) |
+| Hand repair: both hands hold the bat until after contact. Until shortly after the hands' peak speed, a doubtful wrist (low confidence, a forearm length far from usual, or a sudden jump while the other hand moves on smoothly) is placed next to the believable one, at the hands' spacing interpolated from frames where both were seen. Two doubtful wrists that agree are kept. Repaired points are drawn hollow, and **Pose-model points** under the player shows the model's raw output. Hand speed, which locates contact, is smoothed over 50 ms so a briefly misplaced hand doesn't look like a burst of speed | `src/core/sequence.js` (`repairHands`), `src/core/metrics.js` |
 | Metrics a side camera can see: stance width, weight shift, head drift/drop, hand position and path, stride, apparent knee and elbow angles, spine tilt, back-shoulder drop, hip and shoulder turn (estimated from how much the hips and shoulders narrow) | `src/core/metrics.js` |
 | Stance similarity: weighted RMS joint distance between normalized stances | `src/core/match.js` |
 | Beats: open-ended DTW on movement-from-stance features proposes the user's beats from the pro's, then local refinement places them (hand-speed peak, foot landing, leg-kick peak). Comparison: time is stretched linearly between the six beats (yours, as detected or adjusted) | `src/core/dtw.js`, `src/core/compare.js`, `src/core/phases.js` |
@@ -53,13 +55,14 @@ Lengths are measured in torso lengths and shown in inches using the height you e
 
 ### Accuracy: the normalization sweep
 
-`docs/normalization-sweep.md` (regenerate with `npm run sweep`) renders the *same* swing under 45 recording conditions (plus 3 deliberate swing changes) and checks that the comparison still says "identical". Conditions include framing, 480p to 4K, portrait, filmed from behind, left-handers, 1.5–2.0 m hitters, child proportions, 24–240 fps, 4×/8×/16× slow motion with nothing entered, swings 20–25% slower or quicker, long lead-ins, stance picked early or late, keypoint jitter, dropouts, label flicker, camera tilt, off-axis and perspective cameras, a different pose model, and pros recorded differently. It also checks that real differences (longer stride, lower hands, less hip turn) are caught by the right check and nothing else. The same conditions run as tests on every push.
+`docs/normalization-sweep.md` (regenerate with `npm run sweep`) renders the *same* swing under 49 recording conditions (plus 3 deliberate swing changes) and checks that the comparison still says "identical". Conditions include framing, 480p to 4K, portrait, filmed from behind, left-handers, 1.5–2.0 m hitters, child proportions, 24–240 fps, 4×/8×/16× slow motion with nothing entered, swings 20–25% slower or quicker, long lead-ins, stance picked early or late, keypoint jitter, dropouts, label flicker, hands lost or misplaced by the pose model, camera tilt, off-axis and perspective cameras, a different pose model, and pros recorded differently. It also checks that real differences (longer stride, lower hands, less hip turn) are caught by the right check and nothing else. The same conditions run as tests on every push.
 
 Built-in corrections the sweep relies on:
 - Camera tilt is leveled from the ground line under the feet.
 - The pro is rescaled to the hitter's limb proportions.
 - Each swing runs on its own clock, measured from its hand-speed burst, so slow motion and frame rate need no input.
 - Contact placement is robust to keypoint jitter.
+- Hands the pose model loses or misplaces (hidden behind the body, motion blur, one hand snapped to the bat) are repaired from the other hand.
 
 ### Limitations
 

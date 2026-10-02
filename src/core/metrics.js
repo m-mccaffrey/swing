@@ -8,6 +8,7 @@ import { C, kx, ky, kc } from './body25.js';
 import { angle3, clamp, DEG, derivative, gaussianSmooth, fillGaps } from './math.js';
 
 const MIN = 0.05;
+const HAND_VEL_SMOOTH_SEC = 1 / 20;
 
 export function P(f, j) {
   return kc(f, j) > MIN ? [kx(f, j), ky(f, j)] : null;
@@ -158,8 +159,10 @@ export function computeSeries(frames, stanceIndex, fps) {
   const per = frames.map((f) => frameMetrics(f, ctx));
   const series = {};
   for (const key of Object.keys(METRICS)) series[key] = per.map((m) => m[key]);
-  const hx = gaussianSmooth(fillGaps(series.handsX), fps / 60);
-  const hy = gaussianSmooth(fillGaps(series.handsY), fps / 60);
+  // Hand velocity drives contact detection; smoothing over ~50 ms keeps a
+  // briefly misplaced hand from looking like a burst of speed.
+  const hx = gaussianSmooth(fillGaps(series.handsX), fps * HAND_VEL_SMOOTH_SEC);
+  const hy = gaussianSmooth(fillGaps(series.handsY), fps * HAND_VEL_SMOOTH_SEC);
   const vx = derivative(hx).map((v) => v * fps);
   const vy = derivative(hy).map((v) => v * fps);
   series.handVx = vx;

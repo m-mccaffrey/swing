@@ -30,7 +30,7 @@ export function fitCanvas(canvas, cssWidth, cssHeight) {
  * @param {(x:number,y:number)=>[number,number]} [o.map] frame → canvas coordinates
  * @param {string|null} [o.color] single color; null uses OpenPose colors
  */
-export function drawSkeleton(ctx, frame, { map = (x, y) => [x, y], color = null, alpha = 1, lineWidth = 4, radius = 3.5, minConf = 0.1, dash = null, outline = null } = {}) {
+export function drawSkeleton(ctx, frame, { map = (x, y) => [x, y], color = null, alpha = 1, lineWidth = 4, radius = 3.5, minConf = 0.1, dash = null, outline = null, hollowBelow = 0 } = {}) {
   if (!frame) return;
   const ok = (j) => frame[j * 3 + 2] > minConf;
   const P = (j) => map(frame[j * 3], frame[j * 3 + 1]);
@@ -69,10 +69,49 @@ export function drawSkeleton(ctx, frame, { map = (x, y) => [x, y], color = null,
     for (let j = 0; j < NUM_KP; j++) {
       if (!ok(j)) continue;
       const [x, y] = P(j);
-      ctx.fillStyle = color || rgb(j);
       ctx.beginPath();
-      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      if (frame[j * 3 + 2] < hollowBelow) {
+        // An estimate (the pose model wasn't sure): a ring instead of a dot.
+        ctx.arc(x, y, radius * 1.5, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,255,255,0.85)';
+        ctx.fill();
+        ctx.lineWidth = Math.max(1.5, radius * 0.7);
+        ctx.strokeStyle = color || rgb(j);
+        ctx.stroke();
+      } else {
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fillStyle = color || rgb(j);
+        ctx.fill();
+      }
+    }
+  }
+  ctx.restore();
+}
+
+/**
+ * The pose model's own keypoints, unprocessed: small white dots, fainter and
+ * hollow where the model reported low confidence.
+ */
+export function drawPoints(ctx, frame, { map = (x, y) => [x, y], radius = 2.5, minConf = 0.25 } = {}) {
+  if (!frame) return;
+  ctx.save();
+  for (let j = 0; j < NUM_KP; j++) {
+    const c = frame[j * 3 + 2];
+    if (!(c > 0)) continue;
+    const [x, y] = map(frame[j * 3], frame[j * 3 + 1]);
+    ctx.globalAlpha = 0.45 + 0.55 * Math.min(1, c);
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.lineWidth = Math.max(1, radius * 0.6);
+    ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+    ctx.stroke();
+    if (c > minConf) {
+      ctx.fillStyle = '#fff';
       ctx.fill();
+    } else {
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = Math.max(1, radius * 0.4);
+      ctx.stroke();
     }
   }
   ctx.restore();

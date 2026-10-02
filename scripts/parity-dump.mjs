@@ -7,6 +7,7 @@ import { entryFrames } from '../src/core/db.js';
 import { swapLR, LR_GROUPS, NUM_KP } from '../src/core/body25.js';
 import { suggestStanceFrame, detectPitcherSide, canonicalize, estimateSwingFps } from '../src/core/sequence.js';
 import { detectPhases } from '../src/core/phases.js';
+import { hiddenHand, blurredHands, wrongHand } from './lib/sweep.mjs';
 
 const cases = [];
 for (const id of ['synthetic-a', 'synthetic-b', 'synthetic-c']) {
@@ -36,6 +37,23 @@ const slow = renderSwing(makeSpec({ bats: 'L' }), { fps: 30, speedFactor: 4, pre
 cases.push({ name: 'lhh-slowmo4-tilted', frames: slow.frames, fps: slow.fps });
 const noisySlow = renderSwing(makeSpec({ tempo: 1.2 }), { fps: 30, speedFactor: 8, preRoll: 0.5, postRoll: 0.3, noisePx: 4, seed: 23 });
 cases.push({ name: 'noisy-slowmo8-slow-tempo', frames: noisySlow.frames, fps: noisySlow.fps });
+// Pose-model hand failures (exercises repairHands): hidden far hand, blur, a misplaced hand.
+const hands = renderSwing(makeSpec({}), { fps: 30, preRoll: 0.8, postRoll: 0.5, noisePx: 3, seed: 24 });
+cases.push({ name: 'hand-failures-30fps', frames: wrongHand(blurredHands(hiddenHand(hands.frames, hands), hands), hands), fps: hands.fps });
+const hands2 = renderSwing(makeSpec({ bats: 'L' }), { fps: 60, preRoll: 0.6, postRoll: 0.4, seed: 25 });
+cases.push({ name: 'hidden-hand-lhh-60fps', frames: hiddenHand(hands2.frames, hands2, { joint: 4, offTL: 1.1, seed: 8 }), fps: hands2.fps });
+// Top hand off the bat during the set-up (really apart: must be left alone).
+const offBat = renderSwing(makeSpec({ idle: 0.03 }), { fps: 60, preRoll: 1.2, postRoll: 0.4, noisePx: 1, seed: 26 });
+cases.push({
+  name: 'hand-off-bat-setup',
+  fps: offBat.fps,
+  frames: offBat.frames.map((f, i) => {
+    if (i >= offBat.phases.stance - 10) return f;
+    const g = f.slice();
+    g[4 * 3 + 1] += 0.9 * Math.hypot(f[3] - f[24], f[4] - f[25]);
+    return g;
+  }),
+});
 
 // Each case is analyzed the way the tools do it: only the video fps is known,
 // and everything runs on the swing's own clock.

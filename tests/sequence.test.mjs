@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { canonicalize, fixLeftRightFlicker, detectPitcherSide, suggestStanceFrame, resampleFrames, canonToImage } from '../src/core/sequence.js';
+import { canonicalize, fixLeftRightFlicker, detectPitcherSide, suggestStanceFrame, resampleFrames, canonToImage, repairHands } from '../src/core/sequence.js';
+import { renderSwing, makeSpec } from '../src/core/synth.js';
+import { hiddenHand, wrongHand } from '../scripts/lib/sweep.mjs';
 import { swapLR, LR_GROUPS, KP } from '../src/core/body25.js';
 import { archetype, demoUserSwing, mirror, reframe, maxAbsDiff } from './helpers.mjs';
 
@@ -71,4 +73,64 @@ test('resampling preserves timing and canonToImage inverts the normalization', (
   const f = c.frames[40];
   const [x, y] = canonToImage(c.transform, f[KP.LWrist * 3], f[KP.LWrist * 3 + 1]);
   assert.ok(Math.abs(x - frames[40][KP.LWrist * 3]) < 1e-6 && Math.abs(y - frames[40][KP.LWrist * 3 + 1]) < 1e-6);
+});
+
+// ---- hand repair (repairHands)
+
+function handCase(post) {
+  const r = renderSwing(makeSpec({}), { fps: 60, preRoll: 0.8, postRoll: 0.5, seed: 31 });
+  return { r, frames: post ? post(r.frames.map((f) => f.slice()), r) : r.frames };
+}
+const wristErr = (a, b, j) => Math.hypot(a[j * 3] - b[j * 3], a[j * 3 + 1] - b[j * 3 + 1]);
+const torso = (f) => Math.hypot(f[KP.Neck * 3] - f[KP.MidHip * 3], f[KP.Neck * 3 + 1] - f[KP.MidHip * 3 + 1]);
+
+test('hand repair leaves clean hands alone', () => {
+  const { frames } = handCase();
+  assert.equal(maxAbsDiff(repairHands(frames, 60), frames), 0);
+});
+
+test('a hand lost behind the body is put back next to the other hand', () => {
+  const { r, frames } = handCase((f, r) => hiddenHand(f, r, { offTL: 1 }));
+  const out = repairHands(frames, 60);
+  for (let i = r.phases.load; i <= r.phases.contact + 3; i++) {
+    assert.ok(out[i][KP.RWrist * 3 + 2] > 0.25, `frame ${i} still doubtful`);
+    assert.ok(wristErr(out[i], r.frames[i], KP.RWrist) < 0.25 * torso(r.frames[i]), `frame ${i}: ${wristErr(out[i], r.frames[i], KP.RWrist).toFixed(0)} px off`);
+    assert.equal(wristErr(out[i], r.frames[i], KP.LWrist), 0); // the visible hand is untouched
+  }
+});
+
+test('a confidently misplaced hand is moved back', () => {
+  const { r, frames } = handCase((f, r) => wrongHand(f, r, { offTL: 0.9 }));
+  const out = repairHands(frames, 60);
+  for (let i = r.phases.contact - 3; i <= r.phases.contact + 1; i++) {
+    assert.ok(wristErr(frames[i], r.frames[i], KP.LWrist) > 0.5 * torso(r.frames[i]));
+    assert.ok(wristErr(out[i], r.frames[i], KP.LWrist) < 0.25 * torso(r.frames[i]), `frame ${i}`);
+  }
+});
+
+test('two doubtful hands that agree are kept, and a release after contact is left alone', () => {
+  const { r, frames } = handCase((f, r) => {
+    for (let i = r.phases.footPlant; i <= r.phases.contact; i++) for (const j of [KP.LWrist, KP.RWrist]) f[i][j * 3 + 2] = 0.15;
+    // Top hand lets go in the finish: far from the other hand, both confident.
+    for (let i = r.phases.finish; i < f.length; i++) f[i][KP.RWrist * 3 + 1] -= 0.8 * torso(f[i]);
+    return f;
+  });
+  const out = repairHands(frames, 60);
+  for (let i = r.phases.footPlant; i <= r.phases.contact; i++) {
+    for (const j of [KP.LWrist, KP.RWrist]) {
+      assert.equal(wristErr(out[i], frames[i], j), 0);
+      assert.ok(out[i][j * 3 + 2] > 0.25);
+    }
+  }
+  for (let i = r.phases.finish; i < frames.length; i++) assert.equal(wristErr(out[i], frames[i], KP.RWrist), 0);
+});
+
+test('hands that are really apart for a while (a hand off the bat) are not pulled together', () => {
+  const { r, frames } = handCase((f, r) => {
+    // Top hand off the bat for half a second before the stance, both hands clearly seen.
+    for (let i = Math.max(0, r.phases.stance - 30); i < r.phases.stance; i++) f[i][KP.RWrist * 3 + 1] += 0.9 * torso(f[i]);
+    return f;
+  });
+  const out = repairHands(frames, 60);
+  for (let i = Math.max(0, r.phases.stance - 30); i < r.phases.stance; i++) assert.equal(wristErr(out[i], frames[i], KP.RWrist), 0, `frame ${i}`);
 });

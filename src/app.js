@@ -11,7 +11,7 @@ import { demoUserSwing } from './core/synth.js';
 import { NUM_KP } from './core/body25.js';
 import { getLandmarker, analyzeVideo, estimateVideoFps } from './pose/detector.js';
 import { Stage, FramePlayer } from './ui/stage.js';
-import { drawSkeleton, drawScene, canonicalBounds, fitCanvas, cssVar, drawHighlights } from './ui/draw.js';
+import { drawSkeleton, drawScene, canonicalBounds, fitCanvas, cssVar, drawHighlights, drawPoints } from './ui/draw.js';
 import { lineChart } from './ui/charts.js';
 import * as library from './ui/library.js';
 
@@ -733,7 +733,8 @@ function drawResultFrame(i) {
   const showGhost = ghostOn && (i >= user.stanceIndex || evidenceHere);
   stages.result.draw((ctx, map, u) => {
     if (showGhost) drawSkeleton(ctx, toImg(fitPro(pro.canon[j])), { map, color: proColor, lineWidth: 3 * u, radius: 0, alpha: 0.85, outline: 'rgba(0,0,0,0.35)' });
-    drawSkeleton(ctx, toImg(user.canon[i]), { map, lineWidth: 3 * u, radius: 3 * u, outline: 'rgba(0,0,0,0.45)' });
+    drawSkeleton(ctx, toImg(user.canon[i]), { map, lineWidth: 3 * u, radius: 3 * u, outline: 'rgba(0,0,0,0.45)', hollowBelow: 0.3 });
+    if ($('raw-toggle').checked) drawPoints(ctx, a.frames[i], { map, radius: 2.5 * u });
     if (evidenceHere) {
       const o = { pair: ev.pair, scale: u };
       if (showGhost) drawHighlights(ctx, map, toImg(fitPro(pro.canon[j])), ev.joints, proColor, { ...o, stanceFrame: ev.fromStance ? toImg(fitPro(pro.canon[ev.proStance])) : null });
@@ -1155,6 +1156,7 @@ function wire() {
     drawResultFrame(player.index);
   });
   $('ghost-toggle').addEventListener('change', () => drawResultFrame(player.index));
+  $('raw-toggle').addEventListener('change', () => drawResultFrame(player.index));
   $('export-pose').addEventListener('click', exportPose);
   $('export-report').addEventListener('click', exportReport);
   $('restart-btn').addEventListener('click', () => {

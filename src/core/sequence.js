@@ -158,6 +158,140 @@ export function cleanSequence(frames, { fps = 30, maxGapSec = 0.2, smoothSec = 0
   return out;
 }
 
+/**
+ * Both hands hold the bat until well after contact, so the wrists stay within
+ * about a hand's width of each other. Pose models often lose the far hand
+ * behind the body (low confidence, position guessed) or blur both hands at
+ * launch, and a straight-line fill across the fastest part of the swing cuts
+ * the corner of the hand path. From the start until shortly after the hands'
+ * peak speed (some hitters let go with the top hand in the finish):
+ *  - a doubtful wrist is put next to a believable one, at the hands' offset
+ *    interpolated from the frames where both were seen together (its own
+ *    guess is ignored, even when it lands near the other hand);
+ *  - of two confident wrists that disagree, the less believable one (lower
+ *    confidence, odd forearm length; if that doesn't decide, the one that
+ *    jumped since the last frame) is moved the same way;
+ *  - two doubtful wrists that agree with each other are kept as they are;
+ *  - two doubtful wrists that disagree are filled in from nearby frames.
+ * A wrist counts as doubtful when its confidence is low or its forearm length
+ * is far from usual (a confident pose model can still put a hand on the bat).
+ * Moved or kept-doubtful points get ESTIMATED_CONF: high enough to be used
+ * downstream, low enough to be drawn as estimates.
+ */
+export const HANDS_APART_TL = 0.45;
+const HANDS_NOISE_TL = 0.15;
+export const ESTIMATED_CONF = 0.26;
+const DOUBTFUL_CONF = 0.2; // below MIN_CONF: treated as missing and filled in
+const HAND_RELEASE_SEC = 0.15;
+const MISPLACED_MAX_SEC = 0.2;
+
+export function repairHands(frames, fps) {
+  const n = frames.length;
+  const tl = torsoLength(frames);
+  if (!n || !(tl > 0)) return frames;
+  // "Apart" means further apart than this hitter's hands usually are (their
+  // spacing on the bat as the camera sees it), plus room for keypoint noise.
+  const spacing = [];
+  for (const f of frames) {
+    if (f[KP.LWrist * 3 + 2] > MIN_CONF && f[KP.RWrist * 3 + 2] > MIN_CONF) {
+      const d = Math.hypot(f[KP.LWrist * 3] - f[KP.RWrist * 3], f[KP.LWrist * 3 + 1] - f[KP.RWrist * 3 + 1]) / tl;
+      if (d <= HANDS_APART_TL) spacing.push(d);
+    }
+  }
+  const usual = median(spacing);
+  const D = tl * Math.min(HANDS_APART_TL, (Number.isFinite(usual) ? clamp(usual, 0.05, 0.3) : 0.3) + HANDS_NOISE_TL);
+  // First over the whole clip, only to find the hands' peak speed without
+  // spikes from a misplaced hand; then for real, up to just after the peak.
+  const speed = handSpeedSeries(handsTogether(frames, n - 1, D, fps), fps);
+  let peak = 0;
+  for (let i = 1; i < n; i++) if ((speed[i] || 0) > (speed[peak] || 0)) peak = i;
+  return handsTogether(frames, Math.min(n - 1, peak + Math.round(HAND_RELEASE_SEC * fps)), D, fps);
+}
+
+function handsTogether(frames, end, D, fps) {
+  const n = frames.length;
+  const W = [KP.LWrist, KP.RWrist];
+  const E = [KP.LElbow, KP.RElbow];
+  const has = (f, j) => f[j * 3 + 2] > 0;
+  const good = (f, j) => f[j * 3 + 2] > MIN_CONF;
+  const dist = (f, a, b) => Math.hypot(f[a * 3] - f[b * 3], f[a * 3 + 1] - f[b * 3 + 1]);
+
+  // Hands' offset (back wrist minus front wrist) where both were seen
+  // together, and forearm lengths: learned from the whole clip, used up to `end`.
+  const ox = new Array(n).fill(NaN);
+  const oy = new Array(n).fill(NaN);
+  const fore = [[], []];
+  for (let i = 0; i < n; i++) {
+    const f = frames[i];
+    if (good(f, W[0]) && good(f, W[1]) && dist(f, W[0], W[1]) <= D) {
+      ox[i] = f[W[1] * 3] - f[W[0] * 3];
+      oy[i] = f[W[1] * 3 + 1] - f[W[0] * 3 + 1];
+    }
+    for (const k of [0, 1]) if (good(f, W[k]) && good(f, E[k])) fore[k].push(dist(f, W[k], E[k]));
+  }
+  const fx = fillGaps(ox);
+  const fy = fillGaps(oy);
+  const foreLen = fore.map((d) => median(d));
+  // Two confident hands apart for longer than a glitch are really apart (a
+  // hand off the bat): only short stretches count as a misplaced hand.
+  const apart = frames.map((f) => good(f, W[0]) && good(f, W[1]) && dist(f, W[0], W[1]) > D);
+  const glitch = new Array(n).fill(false);
+  for (let i = 0; i < n; ) {
+    let j = i;
+    while (j < n && apart[j]) j++;
+    if (j > i && j - i <= MISPLACED_MAX_SEC * fps) for (let k = i; k < j; k++) glitch[k] = true;
+    i = Math.max(j, i + 1);
+  }
+  // How believable a wrist is: its confidence, less a penalty for an odd forearm.
+  const belief = (f, k) => {
+    let b = f[W[k] * 3 + 2];
+    if (good(f, E[k]) && foreLen[k] > 0) b -= 0.5 * Math.min(1, Math.abs(dist(f, W[k], E[k]) / foreLen[k] - 1));
+    return b;
+  };
+
+  const out = frames.map((f) => f.slice());
+  for (let i = 0; i <= end; i++) {
+    const f = out[i];
+    const offX = Number.isFinite(fx[i]) ? fx[i] : 0;
+    const offY = Number.isFinite(fy[i]) ? fy[i] : 0;
+    // Put wrist k next to the other one.
+    const place = (k) => {
+      const a = W[1 - k];
+      const sign = k === 1 ? 1 : -1;
+      f[W[k] * 3] = f[a * 3] + sign * offX;
+      f[W[k] * 3 + 1] = f[a * 3 + 1] + sign * offY;
+      f[W[k] * 3 + 2] = ESTIMATED_CONF;
+    };
+    // A confident wrist with an impossible forearm is not trusted.
+    const g0 = belief(f, 0) > MIN_CONF;
+    const g1 = belief(f, 1) > MIN_CONF;
+    const together = has(f, W[0]) && has(f, W[1]) && dist(f, W[0], W[1]) <= D;
+    if (g0 && g1) {
+      if (!together && (glitch[i] || !apart[i])) {
+        const b0 = belief(f, 0);
+        const b1 = belief(f, 1);
+        if (Math.abs(b0 - b1) >= 0.15) place(b0 < b1 ? 0 : 1);
+        else if (i > 0) {
+          // Equally sure: the one that jumped away from where the hands just were is wrong.
+          const prev = out[i - 1];
+          const jump = (k) => Math.hypot(f[W[k] * 3] - prev[W[k] * 3], f[W[k] * 3 + 1] - prev[W[k] * 3 + 1]);
+          const [j0, j1] = [jump(0), jump(1)];
+          if (Math.max(j0, j1) > D && Math.max(j0, j1) > 2 * Math.min(j0, j1)) place(j0 > j1 ? 0 : 1);
+        }
+      }
+    } else if (g0 || g1) {
+      // Even a guess that lands near the other hand is a guess: use the believable hand.
+      place(g0 ? 1 : 0);
+    } else if (together) {
+      for (const j of W) f[j * 3 + 2] = Math.max(f[j * 3 + 2], ESTIMATED_CONF);
+    } else {
+      // Neither is believable: leave both to be filled in from nearby frames.
+      for (const j of W) f[j * 3 + 2] = Math.min(f[j * 3 + 2], DOUBTFUL_CONF);
+    }
+  }
+  return out;
+}
+
 /** Wrist-midpoint speed series in torso-lengths per second (image space). */
 export function handSpeedSeries(frames, fps) {
   const tl = torsoLength(frames) || 1;
@@ -247,15 +381,18 @@ export function estimateSwingFps(frames, fps) {
     let est = fps * k;
     let prev = est;
     let burst = null;
+    let hands = frames;
     for (let it = 0; it < 3; it++) {
-      burst = burstOf(frames, est);
+      // Lost or misplaced hands would distort the burst: time the repaired ones.
+      hands = repairHands(frames, est);
+      burst = burstOf(hands, est);
       if (!burst || !(burst.length > 0)) break;
       prev = est;
       est = burst.length / SWING_BURST_SEC;
     }
     if (!burst || !(burst.length > 0)) continue;
     const ok = Math.abs(Math.log(est / prev)) < 0.25;
-    const travel = handTravel(frames, burst.a, burst.b, Math.max(1, Math.round(est * 0.02)));
+    const travel = handTravel(hands, burst.a, burst.b, Math.max(1, Math.round(est * 0.02)));
     if (!best || (ok && (!best.ok || travel > best.travel))) best = { est, ok, travel };
   }
   return best && Number.isFinite(best.est) ? clamp(best.est, 5, 5000) : fps;
@@ -464,9 +601,9 @@ export function canonicalize(rawFrames, { pitcherSide = 'right', stanceIndex = 0
     });
   }
 
-  // 3. Repair frame-to-frame flicker, then fill gaps and smooth.
+  // 3. Repair frame-to-frame flicker and lost hands, then fill gaps and smooth.
   frames = fixLeftRightFlicker(frames, s);
-  if (clean) frames = cleanSequence(frames, { fps });
+  if (clean) frames = cleanSequence(repairHands(frames, fps), { fps });
 
   // 4. Normalize: origin at stance MidHip, unit = stance torso length, y up.
   const scale = bodyScale(frames, s, 2);

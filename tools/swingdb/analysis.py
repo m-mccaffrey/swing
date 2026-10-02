@@ -14,6 +14,7 @@ from .body25 import KP, NUM_KP, LR_GROUPS, ARMS, HEAD, LEGS, empty_frame, swap_l
 NAN = float("nan")
 MIN_CONF = 0.25  # sequence.js
 P_MIN = 0.05  # metrics.js
+HAND_VEL_SMOOTH_SEC = 1 / 20  # metrics.js
 BODY_TO_TORSO = 2.75
 PHASE_KEYS = ["stance", "load", "footPlant", "contact", "extension", "finish"]
 
@@ -251,6 +252,123 @@ def clean_sequence(frames, fps=30, max_gap_sec=0.2, smooth_sec=0.018):
     return out
 
 
+HANDS_APART_TL = 0.45
+HANDS_NOISE_TL = 0.15
+ESTIMATED_CONF = 0.26
+DOUBTFUL_CONF = 0.2
+HAND_RELEASE_SEC = 0.15
+MISPLACED_MAX_SEC = 0.2
+
+
+def repair_hands(frames, fps):
+    """Both hands hold the bat until well after contact; see repairHands() in
+    sequence.js for the rules. Exact port."""
+    n = len(frames)
+    tl = torso_length(frames)
+    if not n or not (isfin(tl) and tl > 0):
+        return frames
+    L, R = KP["LWrist"], KP["RWrist"]
+    spacing = []
+    for f in frames:
+        if f[L * 3 + 2] > MIN_CONF and f[R * 3 + 2] > MIN_CONF:
+            d = math.hypot(f[L * 3] - f[R * 3], f[L * 3 + 1] - f[R * 3 + 1]) / tl
+            if d <= HANDS_APART_TL:
+                spacing.append(d)
+    usual = median(spacing)
+    D = tl * min(HANDS_APART_TL, (clamp(usual, 0.05, 0.3) if isfin(usual) else 0.3) + HANDS_NOISE_TL)
+    speed = hand_speed_series(_hands_together(frames, n - 1, D, fps), fps)
+    or0 = lambda v: v if isfin(v) else 0  # noqa: E731  (JS `v || 0`)
+    peak = 0
+    for i in range(1, n):
+        if or0(speed[i]) > or0(speed[peak]):
+            peak = i
+    return _hands_together(frames, min(n - 1, peak + jsround(HAND_RELEASE_SEC * fps)), D, fps)
+
+
+def _hands_together(frames, end, D, fps):
+    n = len(frames)
+    W = [KP["LWrist"], KP["RWrist"]]
+    E = [KP["LElbow"], KP["RElbow"]]
+
+    def has(f, j):
+        return f[j * 3 + 2] > 0
+
+    def good(f, j):
+        return f[j * 3 + 2] > MIN_CONF
+
+    def dist(f, a, b):
+        return math.hypot(f[a * 3] - f[b * 3], f[a * 3 + 1] - f[b * 3 + 1])
+
+    ox, oy = [NAN] * n, [NAN] * n
+    fore = [[], []]
+    for i in range(n):
+        f = frames[i]
+        if good(f, W[0]) and good(f, W[1]) and dist(f, W[0], W[1]) <= D:
+            ox[i] = f[W[1] * 3] - f[W[0] * 3]
+            oy[i] = f[W[1] * 3 + 1] - f[W[0] * 3 + 1]
+        for k in (0, 1):
+            if good(f, W[k]) and good(f, E[k]):
+                fore[k].append(dist(f, W[k], E[k]))
+    fx, fy = fill_gaps(ox), fill_gaps(oy)
+    fore_len = [median(d) for d in fore]
+    apart = [good(f, W[0]) and good(f, W[1]) and dist(f, W[0], W[1]) > D for f in frames]
+    glitch = [False] * n
+    i = 0
+    while i < n:
+        j = i
+        while j < n and apart[j]:
+            j += 1
+        if j > i and j - i <= MISPLACED_MAX_SEC * fps:
+            for k in range(i, j):
+                glitch[k] = True
+        i = max(j, i + 1)
+
+    def belief(f, k):
+        b = f[W[k] * 3 + 2]
+        if good(f, E[k]) and isfin(fore_len[k]) and fore_len[k] > 0:
+            b -= 0.5 * min(1, abs(dist(f, W[k], E[k]) / fore_len[k] - 1))
+        return b
+
+    out = [list(f) for f in frames]
+    for i in range(end + 1):
+        f = out[i]
+        off_x = fx[i] if isfin(fx[i]) else 0
+        off_y = fy[i] if isfin(fy[i]) else 0
+
+        def place(k):
+            a = W[1 - k]
+            sign = 1 if k == 1 else -1
+            f[W[k] * 3] = f[a * 3] + sign * off_x
+            f[W[k] * 3 + 1] = f[a * 3 + 1] + sign * off_y
+            f[W[k] * 3 + 2] = ESTIMATED_CONF
+
+        g0, g1 = belief(f, 0) > MIN_CONF, belief(f, 1) > MIN_CONF
+        together = has(f, W[0]) and has(f, W[1]) and dist(f, W[0], W[1]) <= D
+        if g0 and g1:
+            if not together and (glitch[i] or not apart[i]):
+                b0, b1 = belief(f, 0), belief(f, 1)
+                if abs(b0 - b1) >= 0.15:
+                    place(0 if b0 < b1 else 1)
+                elif i > 0:
+                    prev = out[i - 1]
+
+                    def jump(k):
+                        return math.hypot(f[W[k] * 3] - prev[W[k] * 3], f[W[k] * 3 + 1] - prev[W[k] * 3 + 1])
+
+                    j0, j1 = jump(0), jump(1)
+                    if max(j0, j1) > D and max(j0, j1) > 2 * min(j0, j1):
+                        place(0 if j0 > j1 else 1)
+        elif g0 or g1:
+            place(1 if g0 else 0)
+        elif together:
+            for j in W:
+                f[j * 3 + 2] = max(f[j * 3 + 2], ESTIMATED_CONF)
+        else:
+            for j in W:
+                f[j * 3 + 2] = min(f[j * 3 + 2], DOUBTFUL_CONF)
+    return out
+
+
 def hand_speed_series(frames, fps):
     tl = _or1(torso_length(frames))
     mids = [_mid_of(f, KP["LWrist"], KP["RWrist"]) for f in frames]
@@ -324,8 +442,10 @@ def estimate_swing_fps(frames, fps):
         est = fps * k
         prev = est
         burst = None
+        hands = frames
         for _ in range(3):
-            burst = _burst_of(frames, est)
+            hands = repair_hands(frames, est)
+            burst = _burst_of(hands, est)
             if not burst or not (burst[0] > 0):
                 break
             prev = est
@@ -333,7 +453,7 @@ def estimate_swing_fps(frames, fps):
         if not burst or not (burst[0] > 0):
             continue
         ok = abs(math.log(est / prev)) < 0.25
-        travel = _hand_travel(frames, burst[1], burst[2], max(1, jsround(est * 0.02)))
+        travel = _hand_travel(hands, burst[1], burst[2], max(1, jsround(est * 0.02)))
         if best is None or (ok and (not best[1] or travel > best[2])):
             best = (est, ok, travel)
     return clamp(best[0], 5, 5000) if best and isfin(best[0]) else fps
@@ -524,7 +644,7 @@ def canonicalize(raw_frames, pitcher_side="right", stance_index=0, fps=30, clean
 
     frames = fix_left_right_flicker(frames, s)
     if clean:
-        frames = clean_sequence(frames, fps=fps)
+        frames = clean_sequence(repair_hands(frames, fps), fps=fps)
 
     scale = body_scale(frames, s, 2)
     if not isfin(scale):
@@ -589,8 +709,8 @@ def compute_series(frames, stance_index, fps):
         S["handReach"].append(math.hypot(h[0] - neck[0], h[1] - neck[1]) if h and neck else NAN)
         S["stride"].append(fa[0] - fa0[0] if fa else NAN)
         S["frontFootLift"].append(fa[1] - fa0[1] if fa else NAN)
-    hx = gaussian_smooth(fill_gaps(S["handsX"]), fps / 60)
-    hy = gaussian_smooth(fill_gaps(S["handsY"]), fps / 60)
+    hx = gaussian_smooth(fill_gaps(S["handsX"]), fps * HAND_VEL_SMOOTH_SEC)
+    hy = gaussian_smooth(fill_gaps(S["handsY"]), fps * HAND_VEL_SMOOTH_SEC)
     vx = [v * fps if isfin(v) else NAN for v in derivative(hx)]
     vy = [v * fps if isfin(v) else NAN for v in derivative(hy)]
     S["handVx"] = vx

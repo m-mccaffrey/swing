@@ -355,3 +355,4 @@ pre.snippet { background: var(--surface-2); padding: 12px; border-radius: 10px; 
 .beat-editor-title { font-weight: 600; font-size: 0.9rem; }
 .beat-editor select { min-height: 32px; padding: 4px 8px; }
 .beat-editor p { flex-basis: 100%; margin: 2px 0 0; }
+.skeleton-note { margin: 8px 0 0; }

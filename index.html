@@ -47,7 +47,8 @@
             <li><strong>Side view:</strong> camera at 90&deg; to the pitch path, facing your chest (or your back). The pitcher should be off to the left or right of the frame.</li>
             <li><strong>Whole body in frame</strong> from head to feet for the entire swing, camera still (tripod or fence).</li>
             <li><strong>Frame rate:</strong> 60 fps or slow motion if your phone can. Nothing to set: the swing's own speed is measured.</li>
-            <li>Good light, one person in frame, 2&ndash;8 seconds around a single swing.</li>
+            <li><strong>Sharp hands:</strong> film in bright light (outdoors in daylight is best) or in slow-motion mode. Both freeze the hands; in dim light they smear into a blur and the pose model has to guess where they are.</li>
+            <li>One person in frame, 2&ndash;8 seconds around a single swing.</li>
           </ul>
         </div>
       </div>
@@ -73,9 +74,9 @@
             <div class="settings-grid">
               <label>Pose model
                 <select id="set-quality">
-                  <option value="lite">Fast (lite)</option>
-                  <option value="full" selected>Balanced (full)</option>
-                  <option value="heavy">Most accurate (heavy, slow)</option>
+                  <option value="heavy" selected>Most accurate (heavy, recommended)</option>
+                  <option value="full">Balanced (full, faster)</option>
+                  <option value="lite">Fast (lite, least accurate)</option>
                 </select>
               </label>
               <label>Frames to analyze per second
@@ -190,7 +191,9 @@
             <div class="phase-marks" id="phase-marks"></div>
           </div>
           <label class="check"><input type="checkbox" id="ghost-toggle" checked> Pro ghost on video</label>
+          <label class="check"><input type="checkbox" id="raw-toggle"> Pose-model points</label>
         </div>
+        <p class="muted small skeleton-note">Hollow dots are estimates: the pose model wasn&rsquo;t sure about that joint (often a hand hidden behind the body or blurred), so it was placed from the other hand or the frames around it. <em>Pose-model points</em> shows what the model itself reported.</p>
         <div class="phase-chips" id="phase-chips"></div>
         <div class="beat-editor" role="group" aria-labelledby="beat-editor-label">
           <span id="beat-editor-label" class="beat-editor-title">Beat looks off?</span>
@@ -250,7 +253,7 @@
       <h2 id="h-how">How it works</h2>
       <ol>
         <li><strong>Pose estimation.</strong> MediaPipe Pose Landmarker runs in your browser on each frame. Its 33 landmarks are converted to the 25-keypoint <a href="https://cmu-perceptual-computing-lab.github.io/openpose/web/html/doc/md_doc_02_output.html">OpenPose BODY_25</a> format, the same format as the pro database.</li>
-        <li><strong>Normalization.</strong> The swing is flipped so the pitcher is always to the right, joints are relabeled as front and back side (so left- and right-handed hitters compare directly), left/right label mix-ups are repaired, and everything is scaled to your torso length.</li>
+        <li><strong>Normalization.</strong> The swing is flipped so the pitcher is always to the right, joints are relabeled as front and back side (so left- and right-handed hitters compare directly), left/right label mix-ups are repaired, and everything is scaled to your torso length. Both hands are on the bat until after contact, so a hand the model lost or misplaced (hidden behind your body, blurred) is put back next to the other one; those points are drawn hollow.</li>
         <li><strong>Stance match.</strong> Your stance frame is compared joint by joint with every pro stance. The closest one is your match.</li>
         <li><strong>Swing clock.</strong> Each swing&rsquo;s tempo is measured from its own hand motion, so slow motion, frame rate and how fast someone swings don&rsquo;t matter. Tempo itself is not compared.</li>
         <li><strong>Beats.</strong> Load, foot plant, contact, extension and finish are found by lining your movement up with the pro&rsquo;s and refining each one from your own motion. You can move any beat by hand. Between two beats, the swings are stretched to match.</li>

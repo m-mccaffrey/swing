@@ -71,6 +71,59 @@ export function flicker(frames, p, seed = 13) {
   return frames.map((f) => (r() < p ? swapLR(f, r() < 0.5 ? LR_GROUPS.legs : LR_GROUPS.arms) : f));
 }
 
+// ------------------------------------------------------------------ pose-model hand failures
+
+const torsoPx = (f) => Math.hypot(f[KP.Neck * 3] - f[KP.MidHip * 3], f[KP.Neck * 3 + 1] - f[KP.MidHip * 3 + 1]) || 100;
+const gaussR = (r) => Math.sqrt(-2 * Math.log(r() + 1e-12)) * Math.cos(2 * Math.PI * r());
+
+/**
+ * The far hand lost behind the body from the load until just after contact:
+ * low confidence and a wandering guess about `offTL` torso lengths off.
+ * `r` is the renderSwing() result (for the true phases).
+ */
+export function hiddenHand(frames, r, { joint = KP.RWrist, conf = 0.1, offTL = 0.8, seed = 5 } = {}) {
+  const rand = rng(seed);
+  let ang = rand() * 2 * Math.PI;
+  const a = r.phases.load;
+  const b = Math.min(frames.length - 1, r.phases.contact + 3);
+  return frames.map((f, i) => {
+    if (i < a || i > b) return f;
+    const g = f.slice();
+    ang += (rand() - 0.5) * 0.6;
+    g[joint * 3] += Math.cos(ang) * offTL * torsoPx(f);
+    g[joint * 3 + 1] += Math.sin(ang) * offTL * torsoPx(f);
+    g[joint * 3 + 2] = conf;
+    return g;
+  });
+}
+
+/** Both hands motion-blurred from foot plant to extension: low confidence, positions roughly right. */
+export function blurredHands(frames, r, { conf = 0.15, jitterTL = 0.04, seed = 6 } = {}) {
+  const rand = rng(seed);
+  return frames.map((f, i) => {
+    if (i < r.phases.footPlant || i > r.phases.extension) return f;
+    const g = f.slice();
+    for (const j of [KP.LWrist, KP.RWrist]) {
+      g[j * 3] += gaussR(rand) * jitterTL * torsoPx(f);
+      g[j * 3 + 1] += gaussR(rand) * jitterTL * torsoPx(f);
+      g[j * 3 + 2] = conf;
+    }
+    return g;
+  });
+}
+
+/** One hand confidently in the wrong place around contact (snapped to the bat or the other arm). */
+export function wrongHand(frames, r, { joint = KP.LWrist, conf = 0.55, offTL = 0.7 } = {}) {
+  return frames.map((f, i) => {
+    if (i < r.phases.contact - 3 || i > r.phases.contact + 1) return f;
+    const g = f.slice();
+    g[joint * 3] -= offTL * torsoPx(f);
+    g[joint * 3 + 1] += 0.3 * torsoPx(f);
+    g[joint * 3 + 2] = conf;
+    return g;
+  });
+}
+
 // ------------------------------------------------------------------ cases
 
 /**
@@ -218,6 +271,10 @@ export const CONDITIONS = [
   { group: 'robust', kind: 'robust', name: 'perspective camera 8 m away', case: cam({ distance: 8 }) },
   { group: 'robust', kind: 'robust', name: 'perspective camera 4 m away', case: cam({ distance: 4 }) },
   { group: 'robust', kind: 'robust', name: 'different pose model (neck/hips placed differently)', case: { post: (f) => poseModelBias(f) } },
+  { group: 'robust', kind: 'robust', name: 'far hand lost behind the body, load to contact (wild low-confidence guesses)', case: { post: (f, r) => hiddenHand(f, r) } },
+  { group: 'robust', kind: 'robust', name: 'both hands motion-blurred, foot plant to extension (low confidence)', case: { post: (f, r) => blurredHands(f, r) } },
+  { group: 'robust', kind: 'robust', name: 'one hand confidently misplaced around contact', case: { post: (f, r) => wrongHand(f, r) } },
+  { group: 'robust', kind: 'robust', name: 'all three hand failures at 30 fps with 3 px jitter', case: { render: { fps: 30, noisePx: 3 }, post: (f, r) => wrongHand(blurredHands(hiddenHand(f, r), r), r) } },
   {
     group: 'robust', kind: 'robust', name: 'realistic phone video: portrait 30 fps, 1.40 m kid, 4° tilt, jitter, dropouts, waggle',
     case: {
