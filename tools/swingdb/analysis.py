@@ -131,6 +131,65 @@ def fill_gaps(series, max_gap=math.inf):
     return out
 
 
+def robust_spline(zs, w, lam, k, iters=3):
+    """Smoothing spline that penalizes discontinuity, with Tukey-biweight
+    outlier rejection. Exact port of robustSpline() in math.js."""
+    n = len(w)
+
+    def ok(i):
+        return w[i] > 0 and all(isfin(z[i]) for z in zs)
+
+    base = [w[i] if ok(i) else 0 for i in range(n)]
+    bs = [[v if isfin(v) else 0 for v in z] for z in zs]
+    keep = [1] * n
+    if n < 3:
+        return [list(z) for z in zs], keep
+    xs = None
+    for it in range(iters + 1):
+        ww = [base[i] * keep[i] for i in range(n)]
+        xs = [_solve_spline(ww, b, lam) for b in bs]
+        if it == iters:
+            break
+        for i in range(n):
+            r2 = 0
+            for c in range(len(bs)):
+                r2 += (xs[c][i] - bs[c][i]) * (xs[c][i] - bs[c][i])
+            u2 = r2 / (k * k)
+            keep[i] = (1 - u2) * (1 - u2) if base[i] > 0 and u2 < 1 else 0
+    return xs, keep
+
+
+def _solve_spline(w, z, lam):
+    n = len(w)
+    a0, a1, a2 = [0.0] * n, [0] * n, [0] * n
+    for i in range(n):
+        dd = 1 if i == 0 or i == n - 1 else 5 if i == 1 or i == n - 2 else 6
+        a0[i] = w[i] + lam * dd + 1e-9
+        if i < n - 1:
+            a1[i] = lam * (-2 if i == 0 or i == n - 2 else -4)
+        if i < n - 2:
+            a2[i] = lam
+    d, e, f = [0.0] * n, [0] * n, [0] * n
+    for i in range(n):
+        em = e[i - 1] if i > 0 else 0
+        fm = f[i - 2] if i > 1 else 0
+        d[i] = math.sqrt(a0[i] - em * em - fm * fm)
+        fm1 = f[i - 1] if i > 0 else 0
+        e[i] = (a1[i] - fm1 * em) / d[i]
+        f[i] = a2[i] / d[i]
+    y = [0.0] * n
+    for i in range(n):
+        t1 = e[i - 1] * y[i - 1] if i > 0 else 0
+        t2 = f[i - 2] * y[i - 2] if i > 1 else 0
+        y[i] = (w[i] * z[i] - t1 - t2) / d[i]
+    x = [0.0] * n
+    for i in range(n - 1, -1, -1):
+        t1 = e[i] * x[i + 1] if i < n - 1 else 0
+        t2 = f[i] * x[i + 2] if i < n - 2 else 0
+        x[i] = (y[i] - t1 - t2) / d[i]
+    return x
+
+
 # ----------------------------------------------------------------- sequence.js
 
 
@@ -230,26 +289,48 @@ def fix_left_right_flicker(frames, ref_index=0):
     return out
 
 
-def clean_sequence(frames, fps=30, max_gap_sec=0.2, smooth_sec=0.018):
+SMOOTH_CUTOFF_HZ = 6
+OUTLIER_TL = 0.2
+
+
+def clean_sequence(frames, fps=30, max_gap_sec=0.2):
+    """Robust smoothing-spline cleanup of every keypoint track; mirrors
+    cleanSequence() in sequence.js."""
     n = len(frames)
     out = [empty_frame() for _ in range(n)]
     max_gap = max(1, jsround(max_gap_sec * fps))
-    sigma = smooth_sec * fps
+    q = fps / (2 * math.pi * SMOOTH_CUTOFF_HZ)
+    lam = q * q * q * q
+    k = OUTLIER_TL * _or100(torso_length(frames))
     for j in range(NUM_KP):
-        xs, ys, cs = [], [], []
-        for f in frames:
-            ok = f[j * 3 + 2] > MIN_CONF
-            xs.append(f[j * 3] if ok else NAN)
-            ys.append(f[j * 3 + 1] if ok else NAN)
-            cs.append(f[j * 3 + 2])
-        fx = gaussian_smooth(fill_gaps(xs, max_gap), sigma)
-        fy = gaussian_smooth(fill_gaps(ys, max_gap), sigma)
-        for i in range(n):
-            if isfin(fx[i]) and isfin(fy[i]):
-                out[i][j * 3] = fx[i]
-                out[i][j * 3 + 1] = fy[i]
-                out[i][j * 3 + 2] = cs[i] if isfin(xs[i]) else 0.2
+        xs = [f[j * 3] for f in frames]
+        ys = [f[j * 3 + 1] for f in frames]
+        cs = [f[j * 3 + 2] for f in frames]
+        ws = [c if c > MIN_CONF else 0 for c in cs]
+        i = 0
+        while i < n:
+            if not ws[i] > 0:
+                i += 1
+                continue
+            last = i
+            m = i + 1
+            while m < n and m - last - 1 <= max_gap:
+                if ws[m] > 0:
+                    last = m
+                m += 1
+            fx, keep = robust_spline([xs[i:last + 1], ys[i:last + 1]], ws[i:last + 1], lam, k)
+            for m in range(i, last + 1):
+                qq = m - i
+                out[m][j * 3] = fx[0][qq]
+                out[m][j * 3 + 1] = fx[1][qq]
+                out[m][j * 3 + 2] = cs[m] if ws[m] > 0 and keep[qq] >= 0.5 else 0.2
+            i = last + 1
     return out
+
+
+def _or100(v):
+    """JavaScript `v || 100`."""
+    return v if isfin(v) and v != 0 else 100
 
 
 HANDS_APART_TL = 0.45

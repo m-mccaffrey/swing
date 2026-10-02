@@ -16,90 +16,91 @@ The same conditions run as tests in `tests/normalization.test.mjs` on every push
 
 | Condition | Result | Swing | Stance | Phase error | Clock | Flags | Worst |
 | --- | --- | --: | --: | --: | --: | --- | --: |
-| reference (same recording as the pro) | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.18 |
-| hitter off-center (+400 px, -120 px) | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.18 |
-| camera twice as far (half size) | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.18 |
-| camera closer (1.6x size) | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.18 |
-| 4K resolution | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.18 |
-| 480p resolution | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.18 |
-| portrait phone video (1080x1920) | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.18 |
-| filmed from behind (mirror view) | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.18 |
-| left-handed hitter, chest view | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.18 |
-| left-handed hitter, from behind | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.18 |
+| reference (same recording as the pro) | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.17 |
+| hitter off-center (+400 px, -120 px) | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.17 |
+| camera twice as far (half size) | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.17 |
+| camera closer (1.6x size) | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.17 |
+| 4K resolution | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.17 |
+| 480p resolution | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.17 |
+| portrait phone video (1080x1920) | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.17 |
+| filmed from behind (mirror view) | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.17 |
+| left-handed hitter, chest view | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.17 |
+| left-handed hitter, from behind | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.17 |
 
 ## Space: body size and proportions
 
 | Condition | Result | Swing | Stance | Phase error | Clock | Flags | Worst |
 | --- | --- | --: | --: | --: | --: | --- | --: |
-| shorter hitter (1.50 m, same proportions) | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.18 |
-| taller hitter (2.00 m) | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.18 |
-| child proportions (legs -20%, arms -10%) | ✅ | 100 | 100 | 0 ms | 1.01 | — | 0.71 |
+| shorter hitter (1.50 m, same proportions) | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.17 |
+| taller hitter (2.00 m) | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.17 |
+| child proportions (legs -20%, arms -10%) | ✅ | 100 | 100 | 0 ms | 1.01 | — | 0.70 |
 | long legs (+15%) | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.41 |
 
 ## Time: frame rate, slow motion, tempo, clip timing
 
 | Condition | Result | Swing | Stance | Phase error | Clock | Flags | Worst |
 | --- | --- | --: | --: | --: | --: | --- | --: |
-| 30 fps | ✅ | 98 | 100 | 33 ms | 1.01 | — | 0.72 |
-| 24 fps | ✅ | 99 | 100 | 42 ms | 1.02 | — | 0.64 |
+| 30 fps | ✅ | 98 | 100 | 33 ms | 1.01 | — | 0.70 |
+| 24 fps | ✅ | 99 | 100 | 42 ms | 1.02 | — | 0.66 |
 | 120 fps | ✅ | 100 | 100 | 8 ms | 1.00 | — | 0.33 |
-| 240 fps | ✅ | 100 | 100 | 17 ms | 1.00 | — | 0.22 |
+| 240 fps | ✅ | 100 | 100 | 13 ms | 1.00 | — | 0.33 |
 | 4x slow motion (120 fps capture played at 30 fps), nothing entered | ✅ | 100 | 100 | 8 ms | 1.00 | — | 0.33 |
-| 8x slow motion (240 fps capture played at 30 fps), nothing entered | ✅ | 100 | 100 | 17 ms | 1.00 | — | 0.22 |
-| 8x slow motion played at 60 fps, nothing entered | ✅ | 100 | 100 | 17 ms | 1.00 | — | 0.25 |
-| 16x slow motion with 3 px jitter, nothing entered | ✅ | 100 | 100 | 15 ms | 1.00 | — | 0.27 |
-| slow motion thinned to a frame budget (4x at 60 fps, every 4th frame) | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.18 |
-| swing 25% slower overall (tempo is not compared) | ✅ | 99 | 100 | 33 ms | 1.25 | — | 0.39 |
-| swing 20% quicker overall | ✅ | 99 | 100 | 17 ms | 0.81 | — | 0.33 |
-| long lead-in with bat waggle (3 s) | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.18 |
-| clip starts right at the stance | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.18 |
-| long tail after the finish (3 s) | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.22 |
+| 8x slow motion (240 fps capture played at 30 fps), nothing entered | ✅ | 100 | 100 | 13 ms | 1.00 | — | 0.33 |
+| 8x slow motion played at 60 fps, nothing entered | ✅ | 100 | 100 | 15 ms | 1.00 | — | 0.25 |
+| 16x slow motion with 3 px jitter, nothing entered | ✅ | 100 | 100 | 15 ms | 1.00 | — | 0.26 |
+| slow motion thinned to a frame budget (4x at 60 fps, every 4th frame) | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.17 |
+| swing 25% slower overall (tempo is not compared) | ✅ | 99 | 100 | 33 ms | 1.25 | — | 0.40 |
+| swing 20% quicker overall | ✅ | 99 | 100 | 17 ms | 0.81 | — | 0.34 |
+| long lead-in with bat waggle (3 s) | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.17 |
+| clip starts right at the stance | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.17 |
+| long tail after the finish (3 s) | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.20 |
 | stance picked 0.15 s early | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.01 |
-| stance picked 0.1 s late | ✅ | 99 | 98 | 0 ms | 1.00 | — | 0.54 |
+| stance picked 0.1 s late | ✅ | 99 | 98 | 17 ms | 1.00 | — | 0.53 |
 
 ## The pro recorded differently
 
 | Condition | Result | Swing | Stance | Phase error | Clock | Flags | Worst |
 | --- | --- | --: | --: | --: | --: | --- | --: |
 | pro at 30 fps, filmed from behind, 4K | ✅ | 99 | 100 | 33 ms | 1.00 | — | 0.17 |
-| pro is a 2.0 m left-hander in 8x slow motion | ✅ | 100 | 100 | 17 ms | 1.00 | — | 0.19 |
+| pro is a 2.0 m left-hander in 8x slow motion | ✅ | 99 | 100 | 17 ms | 1.00 | — | 0.64 |
 | pro keypoints from a different pose model | ✅ | 97 | 93 | 0 ms | 1.00 | — | 0.50 |
 
 ## Robustness: things that can only be reduced, not removed
 
 | Condition | Result | Swing | Stance | Phase error | Clock | Flags | Worst |
 | --- | --- | --: | --: | --: | --: | --- | --: |
-| keypoint jitter 2 px | ✅ | 100 | 100 | 17 ms | 0.99 | — | 0.20 |
-| keypoint jitter 5 px | ✅ | 98 | 99 | 17 ms | 0.98 | — | 0.33 |
-| 5% keypoint dropouts | ✅ | 100 | 100 | 17 ms | 1.03 | — | 0.17 |
-| left/right label flicker on 8% of frames | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.18 |
-| camera tilted 3° | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.18 |
-| camera tilted 8° | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.18 |
-| camera 10° off perpendicular | ✅ | 96 | 89 | 17 ms | 1.02 | — | 0.73 |
-| camera 25° off perpendicular | ❌ limit | 70 | 44 | 117 ms | 1.03 | `stance.handsDepth` `stance.tilt` `plant.hands` `contact.frontLeg` `contact.tilt` `contact.hips` `contact.point` `ext.reach` | 2.10 |
-| perspective camera 8 m away | ✅ | 100 | 99 | 17 ms | 1.00 | — | 0.34 |
+| keypoint jitter 2 px | ✅ | 100 | 100 | 17 ms | 0.99 | — | 0.13 |
+| keypoint jitter 5 px | ✅ | 98 | 99 | 17 ms | 0.98 | — | 0.72 |
+| 5% keypoint dropouts | ✅ | 100 | 100 | 17 ms | 1.03 | — | 0.16 |
+| left/right label flicker on 8% of frames | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.17 |
+| camera tilted 3° | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.17 |
+| camera tilted 8° | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.17 |
+| camera 10° off perpendicular | ✅ | 96 | 89 | 17 ms | 1.02 | — | 0.72 |
+| camera 25° off perpendicular | ❌ limit | 70 | 44 | 117 ms | 1.03 | `stance.handsDepth` `stance.tilt` `plant.hands` `contact.tilt` `contact.hips` `contact.point` `ext.reach` | 2.83 |
+| perspective camera 8 m away | ✅ | 100 | 99 | 17 ms | 1.00 | — | 0.32 |
 | perspective camera 4 m away | ✅ | 99 | 98 | 17 ms | 1.00 | — | 0.49 |
 | different pose model (neck/hips placed differently) | ✅ | 98 | 95 | 0 ms | 1.00 | — | 0.46 |
-| far hand lost behind the body, load to contact (wild low-confidence guesses) | ✅ | 99 | 100 | 17 ms | 1.02 | — | 0.40 |
-| both hands motion-blurred, foot plant to extension (low confidence) | ✅ | 100 | 100 | 17 ms | 1.05 | — | 0.18 |
-| one hand confidently misplaced around contact | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.18 |
-| all three hand failures at 30 fps with 3 px jitter | ✅ | 99 | 99 | 33 ms | 1.12 | — | 0.61 |
-| realistic phone video: portrait 30 fps, 1.40 m kid, 4° tilt, jitter, dropouts, waggle | ✅ | 98 | 100 | 33 ms | 1.03 | — | 0.77 |
+| far hand lost behind the body, load to contact (wild low-confidence guesses) | ✅ | 99 | 100 | 17 ms | 1.02 | — | 0.43 |
+| both hands motion-blurred, foot plant to extension (low confidence) | ✅ | 100 | 100 | 17 ms | 1.05 | — | 0.17 |
+| one hand confidently misplaced around contact | ✅ | 99 | 100 | 17 ms | 1.00 | — | 0.62 |
+| confident one-frame glitches: 4 joints jump half a torso length | ✅ | 100 | 100 | 0 ms | 1.00 | — | 0.17 |
+| all three hand failures at 30 fps with 3 px jitter | ✅ | 99 | 99 | 33 ms | 1.12 | — | 0.57 |
+| realistic phone video: portrait 30 fps, 1.40 m kid, 4° tilt, jitter, dropouts, waggle | ✅ | 98 | 100 | 33 ms | 1.03 | — | 0.75 |
 
 ## Sensitivity: one real difference at a time
 
 | Condition | Result | Swing | Stance | Phase error | Clock | Flags | Worst |
 | --- | --- | --: | --: | --: | --: | --- | --: |
-| longer stride (+15 cm) | ✅ caught | 95 | 100 | 17 ms | 1.00 | `plant.stride` `plant.head` `contact.head` | 1.64 |
-| hands set 15 cm lower in the stance | ✅ caught | 93 | 83 | 17 ms | 1.00 | `stance.handsHeight` | 1.93 |
-| hips open 25° less at contact | ✅ caught | 100 | 100 | 0 ms | 1.00 | `contact.hips` `contact.sequence` | 2.00 |
+| longer stride (+15 cm) | ✅ caught | 95 | 100 | 0 ms | 1.00 | `plant.stride` `plant.head` `contact.head` | 1.63 |
+| hands set 15 cm lower in the stance | ✅ caught | 93 | 83 | 50 ms | 1.00 | `stance.handsHeight` | 1.93 |
+| hips open 25° less at contact | ✅ caught | 100 | 100 | 0 ms | 1.00 | `contact.hips` `contact.sequence` | 2.01 |
 
 ## Keypoint jitter across random seeds
 
 | Jitter | Seeds | False flags (total) | Worst |
 | --- | --: | --: | --: |
-| 2 px at 720p | 8 | 0 | 0.35 |
-| 5 px at 720p | 8 | 0 | 0.88 |
+| 2 px at 720p | 8 | 0 | 0.32 |
+| 5 px at 720p | 8 | 0 | 0.80 |
 
 ## What the sweep found and what changed
 
@@ -115,6 +116,7 @@ Changed later:
 
 6. **Timing is no longer compared; each swing runs on its own clock.** Frame rate, slow-motion factor and frame skipping are unreliable on real clips (YouTube replays, phone slow motion, thinned frames), and an overall slower or quicker swing is not what the feedback is about. The swing clock is now measured from the swing itself: the hands' fast burst (speed above 25% of its peak) lasts a fixed 0.586 swing-seconds. That sets the frames per swing-second used for stance detection, smoothing, event windows and charts, so nothing has to be entered. The comparison then lines up the six beats (stance, load, foot plant, contact, extension, finish) and stretches time linearly between them, so positions are compared at the same point of the swing. The timing checks were removed. The clock is within about 3% across 24–240 fps and 4×/8×/16× slow motion, and tempo changes of ±20–25% produce no flags. Beats can be adjusted by hand in the app and in the Python tool's window when detection misses.
 7. **Hands: the pose model's worst joints.** On real clips the far hand hides behind the body (low confidence, position guessed), both hands blur at launch, and sometimes one hand is confidently put on the bat or the other arm. A doubtful wrist used to be dropped and filled with a straight line, which cuts the corner of the hand path at its fastest, or left missing when the gap was long. Now both hands are kept together until shortly after the hands' peak speed (`repairHands`): a doubtful wrist is placed next to a believable one, at the hands' spacing interpolated from frames where both were seen; a confident wrist with an impossible forearm length, or one that jumped away while the other moved on smoothly, is not believed; two doubtful wrists that agree are kept. Hand speed, which locates contact, is now smoothed over 50 ms instead of 17 ms, so a briefly misplaced hand no longer looks like a burst of speed. The swing clock is measured on the repaired hands. Over 48 seeded variations of each failure (30 and 60 fps, either hand, three severities): far hand lost with wild guesses 12 → 0 runs with false flags; far hand hidden but well guessed 12 → 0; one hand confidently misplaced 44 → 8; both hands blurred 0 → 2 (one borderline flag each; before, blurred hands were dropped, so the contact hand checks were skipped rather than passed).
+8. **Discontinuity is penalized.** Each keypoint track used to be smoothed with a light Gaussian after straight-line gap filling, so a confident one-frame jump (a hand snapped to the bat, a knee flipping) was averaged in rather than rejected. Now every track is fitted with a robust smoothing spline (`robustSpline`): it stays close to confident detections, barely follows doubtful ones, pays a penalty for sudden acceleration (cutoff 6 Hz in swing time, so the same at any frame rate) and ignores any detection more than 0.2 torso lengths off the fitted path. Gaps are bridged along the curve instead of a straight line. Over 48 seeded variations each: confident one-frame glitches 4 → 0 runs with false flags, one hand confidently misplaced 8 → 2, keypoint jitter (3 and 6 px, 16 runs) 1 → 0 false flags. Smoothing harder than this (5 Hz) or rejecting closer points (0.15) started moving the extension beat of a real-tempo swing, so the settings stop short of that.
 
 ## Known limits
 

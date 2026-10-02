@@ -134,3 +134,16 @@ test('hands that are really apart for a while (a hand off the bat) are not pulle
   const out = repairHands(frames, 60);
   for (let i = Math.max(0, r.phases.stance - 30); i < r.phases.stance; i++) assert.equal(wristErr(out[i], frames[i], KP.RWrist), 0, `frame ${i}`);
 });
+
+test('the cleanup spline follows the swing, ignores one-frame jumps and bridges gaps on a curve', async () => {
+  const { robustSpline } = await import('../src/core/math.js');
+  const n = 60;
+  const z = Array.from({ length: n }, (_, i) => 100 * Math.sin(i / 8));
+  const w = z.map(() => 0.9);
+  const noisy = z.slice();
+  noisy[20] += 80; // a confident jump
+  for (let i = 35; i < 41; i++) w[i] = 0; // a gap
+  const { xs, keep } = robustSpline([noisy], w, 0.5, 30);
+  assert.equal(keep[20], 0);
+  for (let i = 0; i < n; i++) assert.ok(Math.abs(xs[0][i] - z[i]) < 1.5, `sample ${i}: ${xs[0][i].toFixed(1)} vs ${z[i].toFixed(1)}`);
+});
