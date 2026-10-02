@@ -14,7 +14,7 @@
 //     flip undoes. That is what lets any side view be compared to any other.
 
 import { KP, NUM_KP, LR_GROUPS, kx, ky, kc, emptyFrame, swapLR } from './body25.js';
-import { clamp, fillGaps, gaussianSmooth, median, mean, derivative } from './math.js';
+import { clamp, fillGaps, gaussianSmooth, median, mean, derivative, robustSpline } from './math.js';
 
 const MIN_CONF = 0.25;
 
@@ -127,32 +127,46 @@ export function fixLeftRightFlicker(frames, refIndex = 0) {
 }
 
 /**
- * Fill short gaps and lightly smooth every keypoint track. Interpolated points
- * get a low (but non-zero) confidence so later steps can down-weight them.
+ * Fill short gaps and smooth every keypoint track with a robust smoothing
+ * spline (math.js robustSpline): confident detections pull the path, doubtful
+ * ones barely do, sudden accelerations are penalized, and a detection far off
+ * the path (a joint that jumped for a frame or two) is ignored. Filled or
+ * rejected points get a low (but non-zero) confidence so later steps can
+ * down-weight them and the overlay draws them as estimates.
  */
-export function cleanSequence(frames, { fps = 30, maxGapSec = 0.2, smoothSec = 0.018 } = {}) {
+export const SMOOTH_CUTOFF_HZ = 6; // swing-time Hz
+export const OUTLIER_TL = 0.2; // further off the path than this: ignored
+
+export function cleanSequence(frames, { fps = 30, maxGapSec = 0.2 } = {}) {
   const n = frames.length;
   const out = frames.map(() => emptyFrame());
   const maxGap = Math.max(1, Math.round(maxGapSec * fps));
-  const sigma = smoothSec * fps;
+  // Cutoff in swing-time Hz, so smoothing is the same at any frame rate.
+  const q = fps / (2 * Math.PI * SMOOTH_CUTOFF_HZ);
+  const lambda = q * q * q * q;
+  const k = OUTLIER_TL * (torsoLength(frames) || 100);
   for (let j = 0; j < NUM_KP; j++) {
-    const xs = [];
-    const ys = [];
-    const cs = [];
-    for (let i = 0; i < n; i++) {
-      const ok = frames[i][j * 3 + 2] > MIN_CONF;
-      xs.push(ok ? frames[i][j * 3] : NaN);
-      ys.push(ok ? frames[i][j * 3 + 1] : NaN);
-      cs.push(frames[i][j * 3 + 2]);
-    }
-    const fx = gaussianSmooth(fillGaps(xs, maxGap), sigma);
-    const fy = gaussianSmooth(fillGaps(ys, maxGap), sigma);
-    for (let i = 0; i < n; i++) {
-      if (Number.isFinite(fx[i]) && Number.isFinite(fy[i])) {
-        out[i][j * 3] = fx[i];
-        out[i][j * 3 + 1] = fy[i];
-        out[i][j * 3 + 2] = Number.isFinite(xs[i]) ? cs[i] : 0.2;
+    const xs = frames.map((f) => f[j * 3]);
+    const ys = frames.map((f) => f[j * 3 + 1]);
+    const cs = frames.map((f) => f[j * 3 + 2]);
+    const ws = cs.map((c) => (c > MIN_CONF ? c : 0));
+    // Fit each run of detections whose gaps are short enough to bridge.
+    let i = 0;
+    while (i < n) {
+      if (!(ws[i] > 0)) {
+        i++;
+        continue;
       }
+      let last = i;
+      for (let m = i + 1; m < n && m - last - 1 <= maxGap; m++) if (ws[m] > 0) last = m;
+      const fit = robustSpline([xs.slice(i, last + 1), ys.slice(i, last + 1)], ws.slice(i, last + 1), lambda, k);
+      for (let m = i; m <= last; m++) {
+        const q = m - i;
+        out[m][j * 3] = fit.xs[0][q];
+        out[m][j * 3 + 1] = fit.xs[1][q];
+        out[m][j * 3 + 2] = ws[m] > 0 && fit.keep[q] >= 0.5 ? cs[m] : 0.2;
+      }
+      i = last + 1;
     }
   }
   return out;
@@ -395,7 +409,8 @@ export function estimateSwingFps(frames, fps) {
     const travel = handTravel(hands, burst.a, burst.b, Math.max(1, Math.round(est * 0.02)));
     if (!best || (ok && (!best.ok || travel > best.travel))) best = { est, ok, travel };
   }
-  return best && Number.isFinite(best.est) ? clamp(best.est, 5, 5000) : fps;
+  // A clip is never faster than real time: allow a quick swing, no less.
+  return best && Number.isFinite(best.est) ? clamp(best.est, Math.max(5, 0.7 * fps), 5000) : fps;
 }
 
 /**

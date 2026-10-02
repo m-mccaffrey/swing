@@ -202,3 +202,75 @@ export function round(v, digits = 2) {
   const p = 10 ** digits;
   return Math.round(v * p) / p;
 }
+
+/**
+ * Smoothing spline that penalizes discontinuity: for each coordinate series
+ * in `zs` minimizes
+ *   Σ w_i·ρ(|x_i − z_i|) + λ·Σ (x_{i−1} − 2x_i + x_{i+1})²
+ * i.e. stay near confident observations but don't accelerate suddenly.
+ * ρ is Tukey's biweight with scale k on the distance over all coordinates
+ * (reweighted least squares, `iters` passes), so an observation more than k
+ * off the path is ignored instead of averaged in. Samples with w = 0 or a
+ * non-finite value are filled by the curve.
+ * Returns { xs, keep } where keep[i] is the final robustness factor (0 = rejected).
+ */
+export function robustSpline(zs, w, lambda, k, iters = 3) {
+  const n = w.length;
+  const ok = (i) => w[i] > 0 && zs.every((z) => Number.isFinite(z[i]));
+  const base = w.map((v, i) => (ok(i) ? v : 0));
+  const bs = zs.map((z) => z.map((v) => (Number.isFinite(v) ? v : 0)));
+  const keep = new Array(n).fill(1);
+  if (n < 3) return { xs: zs.map((z) => z.slice()), keep };
+  let xs = null;
+  for (let it = 0; it <= iters; it++) {
+    const ww = base.map((v, i) => v * keep[i]);
+    xs = bs.map((b) => solveSpline(ww, b, lambda));
+    if (it === iters) break;
+    for (let i = 0; i < n; i++) {
+      let r2 = 0;
+      for (let c = 0; c < bs.length; c++) r2 += (xs[c][i] - bs[c][i]) * (xs[c][i] - bs[c][i]);
+      const u2 = r2 / (k * k);
+      keep[i] = base[i] > 0 && u2 < 1 ? (1 - u2) * (1 - u2) : 0;
+    }
+  }
+  return { xs, keep };
+}
+
+/** Solve (diag(w) + λ·DᵀD)·x = w·z for the second-difference D (banded Cholesky). */
+function solveSpline(w, z, lambda) {
+  const n = w.length;
+  // Bands of DᵀD: diagonal 1,5,6,…,6,5,1; first off-diagonal −2,−4,…,−4,−2; second 1.
+  const a0 = new Array(n);
+  const a1 = new Array(n).fill(0);
+  const a2 = new Array(n).fill(0);
+  for (let i = 0; i < n; i++) {
+    const dd = i === 0 || i === n - 1 ? 1 : i === 1 || i === n - 2 ? 5 : 6;
+    a0[i] = w[i] + lambda * dd + 1e-9;
+    if (i < n - 1) a1[i] = lambda * (i === 0 || i === n - 2 ? -2 : -4);
+    if (i < n - 2) a2[i] = lambda;
+  }
+  const d = new Array(n);
+  const e = new Array(n).fill(0);
+  const f = new Array(n).fill(0);
+  for (let i = 0; i < n; i++) {
+    const em = i > 0 ? e[i - 1] : 0;
+    const fm = i > 1 ? f[i - 2] : 0;
+    d[i] = Math.sqrt(a0[i] - em * em - fm * fm);
+    const fm1 = i > 0 ? f[i - 1] : 0;
+    e[i] = (a1[i] - fm1 * em) / d[i];
+    f[i] = a2[i] / d[i];
+  }
+  const y = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const t1 = i > 0 ? e[i - 1] * y[i - 1] : 0;
+    const t2 = i > 1 ? f[i - 2] * y[i - 2] : 0;
+    y[i] = (w[i] * z[i] - t1 - t2) / d[i];
+  }
+  const x = new Array(n);
+  for (let i = n - 1; i >= 0; i--) {
+    const t1 = i < n - 1 ? e[i] * x[i + 1] : 0;
+    const t2 = i < n - 2 ? f[i] * x[i + 2] : 0;
+    x[i] = (y[i] - t1 - t2) / d[i];
+  }
+  return x;
+}

@@ -109,3 +109,27 @@ test('hand-set beats are used as given, and the automatic beats stay available',
     last = messy.phases[k];
   }
 });
+
+test('beats give the swing clock when the hands could not time the swing', async () => {
+  const { swingFpsFromBeats, pickSwingFps } = await import('../src/core/phases.js');
+  const ref = { stance: 12, load: 45, footPlant: 61, contact: 75, extension: 80, finish: 99 }; // reference swing at 60
+  assert.ok(Math.abs(swingFpsFromBeats(ref) - 60) < 1e-9);
+  const slow = Object.fromEntries(Object.entries(ref).map(([k, v]) => [k, v * 8]));
+  assert.ok(Math.abs(swingFpsFromBeats(slow) - 480) < 1e-6);
+  assert.equal(pickSwingFps(62, ref), 62); // agree: keep the hands' clock
+  assert.equal(pickSwingFps(8, slow), swingFpsFromBeats(slow)); // hands lost: trust the beats
+  assert.equal(pickSwingFps(62, null), 62);
+});
+
+test('the fitted pro stands on the user\'s ground, whatever the proportions', async () => {
+  const { renderCase, scaleLimbs, referencePro } = await import('../scripts/lib/sweep.mjs');
+  const { lowestFoot } = await import('../src/core/compare.js');
+  const cs = renderCase({ post: (f) => scaleLimbs(f, { legs: 0.8, arms: 0.9 }) });
+  const user = prepareSwing({ frames: cs.frames, fps: cs.fps, stanceIndex: cs.truePhases.stance, pitcherSide: cs.trueSide });
+  const pro = referencePro().prep;
+  const c = compareSwing(user, pro);
+  const ground = lowestFoot(user.canon[user.stanceIndex]);
+  for (let j = pro.stanceIndex; j <= pro.phases.finish; j++) {
+    assert.ok(Math.abs(lowestFoot(c.proFit[j]) - ground) < 0.02, `pro frame ${j}: ${(lowestFoot(c.proFit[j]) - ground).toFixed(3)} TL off the ground`);
+  }
+});

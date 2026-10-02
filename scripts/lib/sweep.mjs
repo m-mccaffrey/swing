@@ -124,6 +124,21 @@ export function wrongHand(frames, r, { joint = KP.LWrist, conf = 0.55, offTL = 0
   });
 }
 
+/** Confident single-frame jumps of random joints between load and extension (pose-model glitches). */
+export function glitches(frames, r, { count = 4, offTL = 0.5, seed = 7 } = {}) {
+  const rand = rng(seed);
+  const joints = [KP.LWrist, KP.RWrist, KP.LElbow, KP.RElbow, KP.LKnee, KP.LAnkle, KP.Nose, KP.Neck];
+  const out = frames.map((f) => f.slice());
+  for (let q = 0; q < count; q++) {
+    const j = joints[Math.floor(rand() * joints.length)];
+    const i = r.phases.load + Math.floor(rand() * (r.phases.extension - r.phases.load));
+    const ang = rand() * 2 * Math.PI;
+    out[i][j * 3] += Math.cos(ang) * offTL * torsoPx(frames[i]);
+    out[i][j * 3 + 1] += Math.sin(ang) * offTL * torsoPx(frames[i]);
+  }
+  return out;
+}
+
 // ------------------------------------------------------------------ cases
 
 /**
@@ -274,6 +289,7 @@ export const CONDITIONS = [
   { group: 'robust', kind: 'robust', name: 'far hand lost behind the body, load to contact (wild low-confidence guesses)', case: { post: (f, r) => hiddenHand(f, r) } },
   { group: 'robust', kind: 'robust', name: 'both hands motion-blurred, foot plant to extension (low confidence)', case: { post: (f, r) => blurredHands(f, r) } },
   { group: 'robust', kind: 'robust', name: 'one hand confidently misplaced around contact', case: { post: (f, r) => wrongHand(f, r) } },
+  { group: 'robust', kind: 'robust', name: 'confident one-frame glitches: 4 joints jump half a torso length', case: { post: (f, r) => glitches(f, r) } },
   { group: 'robust', kind: 'robust', name: 'all three hand failures at 30 fps with 3 px jitter', case: { render: { fps: 30, noisePx: 3 }, post: (f, r) => wrongHand(blurredHands(hiddenHand(f, r), r), r) } },
   {
     group: 'robust', kind: 'robust', name: 'realistic phone video: portrait 30 fps, 1.40 m kid, 4° tilt, jitter, dropouts, waggle',
