@@ -537,7 +537,7 @@ def estimate_swing_fps(frames, fps):
         travel = _hand_travel(hands, burst[1], burst[2], max(1, jsround(est * 0.02)))
         if best is None or (ok and (not best[1] or travel > best[2])):
             best = (est, ok, travel)
-    return clamp(best[0], 5, 5000) if best and isfin(best[0]) else fps
+    return clamp(best[0], max(5, 0.7 * fps), 5000) if best and isfin(best[0]) else fps
 
 
 def suggest_stance_frame(frames, fps):

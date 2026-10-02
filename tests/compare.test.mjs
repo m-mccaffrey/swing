@@ -109,3 +109,14 @@ test('hand-set beats are used as given, and the automatic beats stay available',
     last = messy.phases[k];
   }
 });
+
+test('beats give the swing clock when the hands could not time the swing', async () => {
+  const { swingFpsFromBeats, pickSwingFps } = await import('../src/core/phases.js');
+  const ref = { stance: 12, load: 45, footPlant: 61, contact: 75, extension: 80, finish: 99 }; // reference swing at 60
+  assert.ok(Math.abs(swingFpsFromBeats(ref) - 60) < 1e-9);
+  const slow = Object.fromEntries(Object.entries(ref).map(([k, v]) => [k, v * 8]));
+  assert.ok(Math.abs(swingFpsFromBeats(slow) - 480) < 1e-6);
+  assert.equal(pickSwingFps(62, ref), 62); // agree: keep the hands' clock
+  assert.equal(pickSwingFps(8, slow), swingFpsFromBeats(slow)); // hands lost: trust the beats
+  assert.equal(pickSwingFps(62, null), 62);
+});

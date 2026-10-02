@@ -10,7 +10,7 @@
 import { KP, C, NUM_KP } from './body25.js';
 import { canonicalize, resampleFrames, estimateSwingFps } from './sequence.js';
 import { computeSeries, stanceHalfWindow } from './metrics.js';
-import { detectPhases, sanitizePhases, refinePhases, PHASE_KEYS } from './phases.js';
+import { detectPhases, sanitizePhases, refinePhases, PHASE_KEYS, pickSwingFps } from './phases.js';
 import { dtw, pathMaps } from './dtw.js';
 import { stancePose, poseDistance, similarityFromDistance, proportionScales, rescaleBones } from './match.js';
 
@@ -29,7 +29,7 @@ export const ALIGN_FPS = 60;
  * @param {object} [o.phases] known beat frames (pro database entries)
  */
 export function prepareSwing({ frames, fps, swingFps = null, stanceIndex, pitcherSide, phases = null }) {
-  const sf = swingFps ?? estimateSwingFps(frames, fps);
+  const sf = swingFps ?? (phases ? pickSwingFps(estimateSwingFps(frames, fps), phases) : estimateSwingFps(frames, fps));
   const { frames: canon, transform } = canonicalize(frames, { pitcherSide, stanceIndex, fps: sf });
   const series = computeSeries(canon, stanceIndex, sf);
   const detected = detectPhases(canon, sf, stanceIndex, series);

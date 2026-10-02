@@ -409,7 +409,8 @@ export function estimateSwingFps(frames, fps) {
     const travel = handTravel(hands, burst.a, burst.b, Math.max(1, Math.round(est * 0.02)));
     if (!best || (ok && (!best.ok || travel > best.travel))) best = { est, ok, travel };
   }
-  return best && Number.isFinite(best.est) ? clamp(best.est, 5, 5000) : fps;
+  // A clip is never faster than real time: allow a quick swing, no less.
+  return best && Number.isFinite(best.est) ? clamp(best.est, Math.max(5, 0.7 * fps), 5000) : fps;
 }
 
 /**

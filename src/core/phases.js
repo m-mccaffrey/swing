@@ -17,6 +17,33 @@ export const PHASES = [
 
 export const PHASE_KEYS = PHASES.map((p) => p.key);
 
+// Beat times of the reference swing (placeholder A at its true frame rate),
+// in swing-seconds. Only the spans between them are used.
+const REF_BEAT_SEC = { load: 45 / 60, footPlant: 61 / 60, contact: 75 / 60, extension: 80 / 60 };
+
+/**
+ * Frames per swing-second implied by a set of beats: their load→contact and
+ * foot plant→extension spans against the reference swing. NaN if unusable.
+ */
+export function swingFpsFromBeats(p) {
+  if (!p) return NaN;
+  const r = [['load', 'contact'], ['footPlant', 'extension']]
+    .map(([a, b]) => (p[b] - p[a]) / (REF_BEAT_SEC[b] - REF_BEAT_SEC[a]))
+    .filter((v) => Number.isFinite(v) && v > 0);
+  return r.length ? r.reduce((s, v) => s + v, 0) / r.length : NaN;
+}
+
+/**
+ * The swing clock to use when beats are known (a pro entry, or beats set by
+ * hand): the hand-burst clock, unless the beats disagree with it by more than
+ * 1.5x. That happens when the pose model loses the hands for most of the
+ * swing, and then the reviewed beats are the better witness.
+ */
+export function pickSwingFps(handFps, beats) {
+  const b = swingFpsFromBeats(beats);
+  return Number.isFinite(b) && !(Math.abs(Math.log(handFps / b)) <= Math.log(1.5)) ? b : handFps;
+}
+
 export function phaseLabel(key) {
   return PHASES.find((p) => p.key === key)?.label ?? key;
 }

@@ -6,7 +6,7 @@ import { prepareSwing, compareSwing } from './core/compare.js';
 import { detectPitcherSide, suggestStanceFrame, canonToImage, detectionCoverage, estimateSwingFps } from './core/sequence.js';
 import { rankStances, rescaleBones } from './core/match.js';
 import { evaluateFeedback, summarize, formatValue, formatDelta, TORSO_TO_HEIGHT } from './core/feedback.js';
-import { PHASES, phaseLabel } from './core/phases.js';
+import { PHASES, phaseLabel, pickSwingFps } from './core/phases.js';
 import { demoUserSwing } from './core/synth.js';
 import { NUM_KP } from './core/body25.js';
 import { getLandmarker, analyzeVideo, estimateVideoFps } from './pose/detector.js';
@@ -330,27 +330,33 @@ async function showStanceFrame(i) {
 
 // ---------------------------------------------------------------- compare
 
+/** Prepare the user's swing, on the beats' clock when hand-set beats disagree with the hands'. */
+function prepareUser() {
+  const a = state.analysis;
+  state.user = prepareSwing({
+    frames: a.frames,
+    fps: a.fps,
+    swingFps: state.userBeats ? pickSwingFps(state.swingFps, state.userBeats) : state.swingFps,
+    stanceIndex: state.stanceIndex,
+    pitcherSide: state.pitcherSide,
+  });
+}
+
 function compare() {
   const a = state.analysis;
   if (!state.pros.length) {
     showError('The pro database is empty or failed to load, so there is nothing to compare against.');
     return;
   }
+  // Hand-set beats belong to a stance; a new stance starts from automatic beats.
+  if (state.userBeats && state.userBeats.stance !== state.stanceIndex) state.userBeats = null;
   try {
-    state.user = prepareSwing({
-      frames: a.frames,
-      fps: a.fps,
-      swingFps: state.swingFps,
-      stanceIndex: state.stanceIndex,
-      pitcherSide: state.pitcherSide,
-    });
+    prepareUser();
   } catch (e) {
     showError(`${e.message}. Pick a frame where your whole body is clearly visible.`);
     return;
   }
   showError('');
-  // Hand-set beats belong to a stance; a new stance starts from automatic beats.
-  if (state.userBeats && state.userBeats.stance !== state.stanceIndex) state.userBeats = null;
   if (state.swingId) {
     library.updateSwing(state.swingId, { stanceIndex: state.stanceIndex, pitcherSide: state.pitcherSide, height: heightInches(), beats: state.userBeats }).catch(() => {});
   }
@@ -687,8 +693,18 @@ function applyBeats(beats) {
   clearEvidence();
   state.userBeats = beats;
   if (state.swingId) library.updateSwing(state.swingId, { beats }).catch(() => {});
+  retimeUser();
   runComparison();
   refreshResults();
+}
+
+/** Re-prepare the user's swing if its clock should change with the beats. */
+function retimeUser() {
+  const want = state.userBeats ? pickSwingFps(state.swingFps, state.userBeats) : state.swingFps;
+  if (Math.abs(Math.log(want / state.user.swingFps)) > 1e-9) {
+    prepareUser();
+    state.sceneBounds = null;
+  }
 }
 
 function refreshResults() {
@@ -1148,6 +1164,7 @@ function wire() {
     clearEvidence();
     state.userBeats = null;
     if (state.swingId) library.updateSwing(state.swingId, { beats: null }).catch(() => {});
+    retimeUser();
     runComparison();
     refreshResults();
   });
