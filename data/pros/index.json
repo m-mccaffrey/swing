@@ -23,16 +23,16 @@
       "synthetic": true
     },
     {
-      "id": "ken-griffey-jr",
-      "file": "ken-griffey-jr.json",
-      "name": "Ken Griffey, Jr.",
-      "bats": "L"
-    },
-    {
       "id": "mookie-betts",
       "file": "mookie-betts.json",
       "name": "Mookie Betts",
       "bats": "R"
+    },
+    {
+      "id": "ken-griffey-jr",
+      "file": "ken-griffey-jr.json",
+      "name": "Ken Griffey, Jr.",
+      "bats": "L"
     }
   ]
 }
