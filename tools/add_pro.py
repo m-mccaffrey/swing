@@ -63,6 +63,7 @@ def parse_args(argv=None):
                    help="analyze at most this many frames of the clip, skipping evenly (default 240). Slow-motion clips have "
                         "far more frames than a swing needs; the swing's own clock keeps the comparison right either way")
     p.add_argument("--cookies-from-browser", help="pass browser cookies to yt-dlp if YouTube asks you to sign in (chrome, firefox, safari, ...)")
+    p.add_argument("--cookies", help="a cookies.txt file (Netscape format) for yt-dlp, where there's no browser to read (e.g. Colab)")
     p.add_argument("--keep-video", action="store_true", help="keep the downloaded clip (in .cache/previews/, not committed)")
     p.add_argument("--dry-run", action="store_true", help="analyze and make the preview, but don't write the database")
     p.add_argument("--db", default=str(ROOT / "data" / "pros"), help="database directory (default: data/pros)")
@@ -110,7 +111,7 @@ def main(argv=None, *, thumb_height=None):
                 sys.exit("--end must be after --start")
             print(f"Downloading {end - start:.1f} s from {args.url} ...")
             path, info, read_start, read_end = video.download_clip(
-                args.url, start, end, work, cookies_from_browser=args.cookies_from_browser
+                args.url, start, end, work, cookies_from_browser=args.cookies_from_browser, cookies=args.cookies
             )
             title = info.get("title") or title
             clip = {
@@ -147,6 +148,8 @@ def main(argv=None, *, thumb_height=None):
             from swingdb.engine import PoseEngine
 
             tracker = PoseEngine(model, quality=args.model, target_x=args.target_x)
+            on_gpu = "MoveNet and EfficientPose" if tracker.effpose else "MoveNet"
+            print(f"Pose tracking: {args.model} ({on_gpu} on the {tracker.device}, MediaPipe on the CPU)")
         else:
             tracker = pose_mod.PoseExtractor(model)
         frames, people, times, thumbs, thumb_scale, t0 = [], [], [], [], 1.0, time.time()

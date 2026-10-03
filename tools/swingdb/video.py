@@ -31,7 +31,7 @@ class _QuietLogger:
         pass
 
 
-def download_clip(url, start, end, workdir, cookies_from_browser=None, max_height=1080, log=print, extra_opts=None):
+def download_clip(url, start, end, workdir, cookies_from_browser=None, max_height=1080, log=print, extra_opts=None, cookies=None):
     """Download [start, end] seconds of a YouTube video (video only, no audio).
 
     With ffmpeg installed only that section is fetched and cut exactly.
@@ -57,6 +57,8 @@ def download_clip(url, start, end, workdir, cookies_from_browser=None, max_heigh
     }
     if cookies_from_browser:
         opts["cookiesfrombrowser"] = (cookies_from_browser,)
+    if cookies:
+        opts["cookiefile"] = str(cookies)  # a cookies.txt (Netscape format) exported from a signed-in browser
     if has_ffmpeg:
         opts["download_ranges"] = download_range_func(None, [(start, end)])
         opts["force_keyframes_at_cuts"] = True

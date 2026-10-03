@@ -130,11 +130,14 @@ class PoseEngine:
             min_pose_detection_confidence=0.1, min_pose_presence_confidence=0.1))
         so = ort.SessionOptions()
         so.log_severity_level = 3
-        self.movenet = ort.InferenceSession(str(MODELS / "movenet-thunder.onnx"), so, providers=["CPUExecutionProvider"])
+        # On an NVIDIA GPU when onnxruntime-gpu is installed (e.g. Colab), else the CPU.
+        providers = [p for p in ("CUDAExecutionProvider", "CPUExecutionProvider") if p in ort.get_available_providers()]
+        self.movenet = ort.InferenceSession(str(MODELS / "movenet-thunder.onnx"), so, providers=providers)
+        self.device = "GPU (CUDA)" if "CUDAExecutionProvider" in self.movenet.get_providers() else "CPU"
         self._mn_input = self.movenet.get_inputs()[0].name
         self.effpose = None
         if any(c.startswith("efficientpose") for c in self.referee["candidates"]):
-            self.effpose = ort.InferenceSession(str(MODELS / "efficientpose.onnx"), so, providers=["CPUExecutionProvider"])
+            self.effpose = ort.InferenceSession(str(MODELS / "efficientpose.onnx"), so, providers=providers)
             self._ep_input = self.effpose.get_inputs()[0].name
         self.crop = None  # square (x0, y0, side) around the hitter for this frame
         self.last = None  # last crop that held the hitter (to find them again after losing them)

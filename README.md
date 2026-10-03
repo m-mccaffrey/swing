@@ -146,10 +146,22 @@ Useful options:
 | `--stance 0.4` | stance moment, in seconds from the clip start |
 | `--file swing.mp4` | use a local video instead of a URL |
 | `--cookies-from-browser chrome` | if YouTube asks you to sign in |
+| `--cookies cookies.txt` | the same, from an exported cookies file (for machines without a browser, like Colab) |
 | `--dry-run` | analyze and make the preview without touching the database |
 | `--model fast` | pose tracking: `best` (default), `fast` (about three times as fast, a little less accurate), or `heavy`/`full`/`lite` (the older MediaPipe-only method) |
 
 Pick clips filmed from the side, perpendicular to the pitch path, with the hitter's whole body in view. Broadcast center-field shots don't work for this.
+
+### On a Colab GPU (nothing to install)
+
+`tools/add_pros_colab.ipynb` runs the same tool on Google Colab's free GPU, up to 10 swings at a time:
+
+1. Open it in Colab: **File → Open notebook → GitHub**, enter `m-mccaffrey/swing`, then pick `tools/add_pros_colab.ipynb`. Or download it ([raw file](https://raw.githubusercontent.com/m-mccaffrey/swing/HEAD/tools/add_pros_colab.ipynb)) and use **File → Upload notebook**.
+2. **Runtime → Change runtime type → T4 GPU**, then run **1. Setup**.
+3. Fill in the form in **2. Swings**: name, link (or an uploaded video's file name), start and end. Run it. Each swing's six beat frames are shown when it's done.
+4. **3a** downloads a zip of the new entries to commit yourself. **3b** pushes them straight to the repo, using a GitHub token saved as the Colab secret `GITHUB_TOKEN`. The new entries go on top of the latest branch, so swings added meanwhile are kept.
+
+MoveNet and EfficientPose run on the GPU; MediaPipe stays on the CPU. YouTube often blocks cloud servers like Colab. If it asks you to sign in, upload a `cookies.txt` exported from your signed-in browser and name it in `cookies_file`, or upload the clips yourself.
 
 ### With the in-app builder (`builder.html`)
 
@@ -223,6 +235,7 @@ data/pros/                 pro swing database (index.json + one file per swing)
 scripts/                   build, dev server, OpenPose importer, synthetic generator
 tools/add_pro.py           YouTube/local video → pro database entry (Python)
 tools/add_pro_gui.py       the same, in a window (Tkinter)
+tools/add_pros_colab.ipynb the same on a Colab GPU, up to 10 swings at a time
 tools/swingdb/             its modules: pose engine, video, detection (port of the JS), entry writer
 tools/posebench/           pose-tracking benchmark on COCO batters, and referee training
 tests/                     unit tests
