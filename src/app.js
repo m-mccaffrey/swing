@@ -36,6 +36,7 @@ const state = {
   stanceIndex: 0,
   suggestedStance: 0,
   sideDetect: null,
+  sideManual: false, // the user chose the pitcher side (else it follows the stance pick)
   pitcherSide: 'right',
   user: null,
   ranking: [],
@@ -296,11 +297,9 @@ function afterAnalysis(saved = null) {
   state.swingFps = estimateSwingFps(frames, a.fps);
   state.suggestedStance = suggestStanceFrame(frames, state.swingFps);
   state.stanceIndex = saved?.stanceIndex ?? state.suggestedStance;
-  state.sideDetect = detectPitcherSide(frames, state.stanceIndex, state.swingFps);
-  state.pitcherSide = saved?.pitcherSide ?? state.sideDetect.side;
-  document.querySelector(`#pitcher-side input[value="${state.pitcherSide}"]`).checked = true;
-  const conf = Math.round(state.sideDetect.confidence * 100);
-  $('pitcher-hint').textContent = `Auto-detected from your head turn, hand position, stride and swing direction (${conf}% confident). Change it if it is wrong.`;
+  state.sideManual = Boolean(saved?.sideManual);
+  state.pitcherSide = saved?.pitcherSide ?? 'right';
+  updateSide();
   const note = $('coverage-note');
   if (coverage < 0.8) {
     note.hidden = false;
@@ -324,11 +323,42 @@ function makeStanceStage() {
   attachFixHandlers(stages.stance);
 }
 
+/**
+ * Detect the pitcher side at the current stance pick. It follows the stance
+ * until the user chooses a side; after that it only says when the swing
+ * disagrees. (A side detected at the wrong stance, e.g. in the finish, would
+ * flip the whole comparison.)
+ */
+function updateSide() {
+  state.sideDetect = detectPitcherSide(userFrames(), state.stanceIndex, state.swingFps);
+  const { side, confidence } = state.sideDetect;
+  const conf = Math.round(confidence * 100);
+  if (!state.sideManual) state.pitcherSide = side;
+  document.querySelector(`#pitcher-side input[value="${state.pitcherSide}"]`).checked = true;
+  const hint = $('pitcher-hint');
+  hint.classList.toggle('warn', false);
+  if (!state.sideManual) {
+    hint.textContent = `Detected from your stride, hand path, hand position and head turn at this stance (${conf}% sure). Change it if it is wrong.`;
+    if (conf < 40) {
+      hint.textContent = `Detected at this stance, but only ${conf}% sure: check it. The pitcher is on the side your front foot steps toward.`;
+      hint.classList.toggle('warn', true);
+    }
+  } else if (side !== state.pitcherSide && conf >= 30) {
+    hint.textContent = `You chose ${state.pitcherSide}, but at this stance the swing looks like the pitcher is to the ${side} (${conf}% sure). Your front foot should step toward the pitcher.`;
+    hint.classList.toggle('warn', true);
+  } else {
+    hint.textContent = 'Set by you.';
+  }
+}
+
 async function showStanceFrame(i) {
   const a = state.analysis;
   i = Math.max(0, Math.min(a.frames.length - 1, i));
   if (state.fixing) state.fixFrame = i;
-  else state.stanceIndex = i;
+  else if (state.stanceIndex !== i) {
+    state.stanceIndex = i;
+    updateSide();
+  }
   $('stance-slider').value = String(i);
   $('stance-frame-label').textContent = state.fixing
     ? `Fixing frame ${i + 1} of ${a.frames.length} · ${fmtTime(a.times[i])} · your stance is frame ${state.stanceIndex + 1}`
@@ -386,6 +416,7 @@ function setPins(pins) {
   state.pins = normalizePins(pins);
   state.fixedFrames = null;
   state.swingFps = estimateSwingFps(userFrames(), a.fps);
+  updateSide();
   if (state.swingId) library.updateSwing(state.swingId, { pins: state.pins }).then(renderSavedList).catch(() => {});
   updateFixStatus();
   drawStanceStage(state.fixing ? state.fixFrame : state.stanceIndex);
@@ -480,7 +511,7 @@ function compare() {
   }
   showError('');
   if (state.swingId) {
-    library.updateSwing(state.swingId, { stanceIndex: state.stanceIndex, pitcherSide: state.pitcherSide, height: heightInches(), beats: state.userBeats }).catch(() => {});
+    library.updateSwing(state.swingId, { stanceIndex: state.stanceIndex, pitcherSide: state.pitcherSide, sideManual: state.sideManual, height: heightInches(), beats: state.userBeats }).catch(() => {});
   }
   state.ranking = rankStances(state.user.stancePose, state.pros);
   // The video element moves into the results player, so the stance step closes.
@@ -1218,7 +1249,7 @@ async function openSaved(id) {
     }
   }
   show('step-upload', false);
-  afterAnalysis({ stanceIndex: rec.stanceIndex, pitcherSide: rec.pitcherSide, pins: rec.pins });
+  afterAnalysis({ stanceIndex: rec.stanceIndex, pitcherSide: rec.pitcherSide, sideManual: rec.sideManual, pins: rec.pins });
   // Stance already picked last time: go straight to the results.
   if (rec.stanceIndex != null && !$('step-stance').hidden) {
     await dbReady;
@@ -1259,6 +1290,8 @@ function wire() {
   document.querySelectorAll('#pitcher-side input').forEach((r) =>
     r.addEventListener('change', () => {
       state.pitcherSide = r.value;
+      state.sideManual = true;
+      updateSide();
     }),
   );
   $('compare-btn').addEventListener('click', () => {

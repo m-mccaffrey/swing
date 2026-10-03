@@ -186,8 +186,16 @@ def main(argv=None, *, thumb_height=None):
             print(f"  warning: only about {swing_fps:.0f} frames cover each swing-second; raise --max-frames for a finer look at contact.")
         side_note = "given" if args.pitcher else f"auto, {det['sideConfidence']:.0%} confident"
         print(f"Pitcher side: {det['pitcherSide']} ({side_note})")
+        if not args.pitcher and det["sideConfidence"] < 0.4:
+            print("  warning: not sure which side the pitcher is on. Check the preview: the front foot steps toward the\n"
+                  "  pitcher. If it's wrong (or the stance frame is), run again with --pitcher left/right (and --stance).")
         for k in PHASE_KEYS:
             print(f"  {LABELS[k]:<10} frame {phases[k]:>4}  {phases[k] / fps:6.2f} s")
+        late_stance = stance is None and phases["stance"] > 0.6 * len(frames)
+        if late_stance:
+            print("  warning: the stance was found late in the clip, which usually means the swing wasn't found (the\n"
+                  "  finish looked like a stance). Check the preview; if it's wrong, run again with --stance (seconds\n"
+                  "  from the clip start) or fix the beats in add_pro_gui.py or builder.html.")
 
         # 4. Preview of the phase frames.
         images = {}
@@ -199,7 +207,8 @@ def main(argv=None, *, thumb_height=None):
                 break
         (cache / "previews").mkdir(parents=True, exist_ok=True)
         preview_path = cache / "previews" / f"{entry_id}.jpg"
-        preview.contact_sheet(images, frames, phases, fps, preview_path, title=f"{args.name} - {title}")
+        preview.contact_sheet(images, frames, phases, fps, preview_path,
+                              title=f"{args.name} - {title} - pitcher on the {det['pitcherSide']}")
         print(f"Preview: {preview_path}")
 
         # 5. Database entry.
@@ -223,7 +232,7 @@ def main(argv=None, *, thumb_height=None):
             os.replace(path, video_path)
             print(f"Kept clip: {video_path}")
         return {"entry": out, "entryData": entry, "preview": preview_path, "id": entry_id, "phases": phases,
-                "pitcherSide": det["pitcherSide"], "fps": fps, "swingFps": swing_fps, "frames": frames,
+                "pitcherSide": det["pitcherSide"], "sideConfidence": 1.0 if args.pitcher else det["sideConfidence"], "lateStance": late_stance, "fps": fps, "swingFps": swing_fps, "frames": frames,
                 "times": times, "clipStart": read_start, "video": video_path, "title": title, "db": args.db,
                 "thumbs": thumbs, "thumbScale": thumb_scale}
     finally:

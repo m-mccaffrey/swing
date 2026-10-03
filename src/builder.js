@@ -22,6 +22,7 @@ const st = {
   stance: 0,
   phases: null,
   pitcherSide: 'right',
+  sideManual: false, // chosen by the user or taken from an entry (else it follows the stance)
   index: 0,
   canon: null,
   bounds: null,
@@ -171,6 +172,22 @@ function realFps() {
   return st.swingFps;
 }
 
+/**
+ * Pitcher side at the current stance: detected (and followed when the stance
+ * moves) unless it was chosen or came from an entry; then only a warning when
+ * the swing disagrees. A side detected at the wrong stance flips the entry.
+ */
+function updateSide() {
+  const { side, confidence } = detectPitcherSide(st.frames, st.stance, realFps());
+  const conf = Math.round(confidence * 100);
+  if (!st.sideManual) st.pitcherSide = side;
+  document.querySelector(`#b-side input[value="${st.pitcherSide}"]`).checked = true;
+  const hint = $('b-side-hint');
+  if (!st.sideManual) hint.textContent = `Detected at this stance (${conf}% sure)${conf < 40 ? ': check it' : ''}. The front foot steps toward the pitcher.`;
+  else if (side !== st.pitcherSide && conf >= 30) hint.textContent = `Check this: at this stance the swing looks like the pitcher is to the ${side} (${conf}% sure). The front foot steps toward the pitcher.`;
+  else hint.textContent = `The swing agrees (${conf}% sure).`;
+}
+
 function setFrames({ frames, times = null, fps, width, height, stance = null, phases = null, pitcherSide = null }) {
   if (!frames?.length) {
     error('No frames found.');
@@ -183,8 +200,9 @@ function setFrames({ frames, times = null, fps, width, height, stance = null, ph
   st.width = width;
   st.height = height;
   st.stance = stance ?? suggestStanceFrame(frames, realFps());
-  st.pitcherSide = pitcherSide ?? detectPitcherSide(frames, st.stance, realFps()).side;
-  document.querySelector(`#b-side input[value="${st.pitcherSide}"]`).checked = true;
+  st.sideManual = Boolean(pitcherSide);
+  st.pitcherSide = pitcherSide || 'right';
+  updateSide();
   recanon();
   st.phases = phases ? sanitizePhases({ ...phases, stance: st.stance }, frames.length) : detectPhases(st.canon, realFps(), st.stance);
   st.stage?.destroy();
@@ -231,6 +249,7 @@ function renderPhases() {
       st.phases[ph.key] = st.index;
       if (ph.key === 'stance') {
         st.stance = st.index;
+        updateSide();
         recanon();
       }
       renderPhases();
@@ -343,6 +362,8 @@ $('b-redetect').addEventListener('click', () => {
 document.querySelectorAll('#b-side input').forEach((r) =>
   r.addEventListener('change', () => {
     st.pitcherSide = r.value;
+    st.sideManual = true;
+    updateSide();
     recanon();
     goTo(st.index);
   }),

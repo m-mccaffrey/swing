@@ -31,7 +31,7 @@ except ImportError:  # pragma: no cover - depends on the Python build
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import add_pro  # noqa: E402
-from swingdb.analysis import PHASE_KEYS  # noqa: E402
+from swingdb.analysis import PHASE_KEYS, detect_pitcher_side  # noqa: E402
 from swingdb.entry import slugify, write_entry  # noqa: E402
 
 ROOT = add_pro.ROOT
@@ -616,9 +616,18 @@ class App:
         if not entry_id:
             raise ValueError("Use letters or digits in the player's name (it becomes the file name).")
         entry = dict(self.result["entryData"])
+        stance = int(self.beats["stance"])
         entry.update(id=entry_id, name=name, team=self.team.get().strip(), bats=self.bats.get(),
-                     notes=self.notes.get().strip(), stanceFrame=int(self.beats["stance"]),
+                     notes=self.notes.get().strip(), stanceFrame=stance,
                      phases={k: int(self.beats[k]) for k in PHASE_KEYS})
+        # The pitcher side was detected at the stance the analysis guessed; if the stance was moved
+        # (say from the finish to the real stance), detect it again there unless it was set by hand.
+        if self.pitcher.get() not in ("left", "right"):
+            side, conf, _ = detect_pitcher_side(self.result["frames"], stance, self.result["swingFps"])
+            entry["orientation"] = {**entry.get("orientation", {}), "pitcherSide": side}
+            self.side_note = f"pitcher on the {side}, detected at the stance ({conf:.0%} sure)"
+        else:
+            self.side_note = f"pitcher on the {self.pitcher.get()} (set by you)"
         return entry
 
     def _save(self):
@@ -644,7 +653,7 @@ class App:
         verb = "Updated" if self.saved and self.saved[0] == entry["id"] else "Added"
         self.saved = (entry["id"], dict(self.beats))
         self.result["id"] = entry["id"]
-        self._append(f"\n{verb} {rel} (beats: " + ", ".join(f"{k} {entry['phases'][k]}" for k in PHASE_KEYS) + ")\n")
+        self._append(f"\n{verb} {rel} (beats: " + ", ".join(f"{k} {entry['phases'][k]}" for k in PHASE_KEYS) + f"; {self.side_note})\n")
         self.git_btn.state(["!disabled"])
         self.status.config(text=f"{verb} {rel}. Commit data/pros to publish it (Copy git commands).")
         self.sheet_stale = True
@@ -671,8 +680,11 @@ class App:
             frames = r["frames"]
             scaled = {self.beats[k]: scale_frame(frames[self.beats[k]], s) for k in PHASE_KEYS}
             path = Path(r["preview"]).with_name(f"{r['id']}.jpg")
+            side = self.pitcher.get()
+            if side not in ("left", "right"):
+                side = detect_pitcher_side(frames, int(self.beats["stance"]), r["swingFps"])[0]
             contact_sheet(images, [scaled.get(i) for i in range(len(frames))], self.beats, r["fps"], path,
-                          title=f"{self.name.get().strip() or r['id']} - {r['title']}")
+                          title=f"{self.name.get().strip() or r['id']} - {r['title']} - pitcher on the {side}")
             r["preview"] = path
             self.sheet_stale = False
         except Exception as e:  # noqa: BLE001

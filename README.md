@@ -33,7 +33,7 @@ If you use "Deploy from a branch" instead, the app still works. It loads MediaPi
 
 ## Filming tips (what the analysis assumes)
 
-- **Camera perpendicular to the pitch path.** Put it on the open side facing the hitter's chest, or behind the hitter's back; both work. The pitcher should be off to the left or right of the frame. The app detects which side; you can override it.
+- **Camera perpendicular to the pitch path.** Put it on the open side facing the hitter's chest, or behind the hitter's back; both work. The pitcher should be off to the left or right of the frame. The app detects which side from your stride, hand path, hand position and head turn at the stance you pick, so it follows when you move the stance. You can override it, and it tells you if the swing disagrees with your choice. Left- and right-handed hitters compare directly: both swings are turned to face the pitcher on the same side and their joints relabelled front and back, so a lefty pro's ghost on a righty's video is drawn mirrored on purpose.
 - Whole body in frame for the entire swing, camera still, one person in view.
 - Any frame rate works, including phone slow motion, and there is nothing to set: the swing is timed by its own hand speed. 60 fps or slow motion gives a sharper look at contact.
 - **Sharp hands.** Film in bright light (daylight is best) or in slow-motion mode. Both use a short exposure, which freezes the hands. In dim light the hands smear into a blur at launch and the pose model has to guess where they are.
@@ -133,7 +133,7 @@ What it does:
 
 1. Downloads only that time range, video only (the whole video if ffmpeg isn't installed). It uses H.264 at up to 1080p and the highest frame rate available. Slow-motion replays are fine as they are. Long or slow-motion clips are thinned evenly to at most 240 analyzed frames (`--max-frames`).
 2. Finds the hitter's pose in every frame with the pose engine (the same models and referee as the web app; see [Pose tracking](#pose-tracking)) and converts it to OpenPose BODY_25. If several people are in the frame (catcher, umpire), it locks on to the most prominent one and follows them. Pass `--target-x 0.3` to point at the hitter instead: 0 is the left edge of the frame, 1 the right.
-3. Measures the swing clock, then auto-detects the pitcher side, stance and beats. The logic is the same as in the browser; `tools/tests` checks the Python port against the JavaScript.
+3. Measures the swing clock, then auto-detects the stance, the pitcher side (at that stance) and the beats. The logic is the same as in the browser; `tools/tests` checks the Python port against the JavaScript. It warns when it isn't sure of the pitcher side, or when the stance turned up late in the clip (usually a sign the swing wasn't found). Moving the stance in the window's Beats tab re-detects the side at the new stance unless you set it. A test checks every entry in `data/pros` against its own swing.
 4. Writes `data/pros/<id>.json`, adds it to `index.json` and deletes the video. Only keypoints are kept, plus the source URL and timestamps in the entry's `clip` field.
 5. Saves a preview of the six beat frames with the skeleton drawn on to `.cache/previews/<id>.jpg` (not committed). Check it. If a beat is off, fix it in the window (`add_pro_gui.py`), or load the entry in `builder.html` (**Existing database entry**), fix it there and download the corrected file over the original.
 
