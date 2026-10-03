@@ -26,9 +26,10 @@ sys.path.insert(0, str(HERE))
 from metrics import DATA, labels, load_set, report, score  # noqa: E402
 from swingdb.referee import consensus_height, feature_vector, fuse, raw_features  # noqa: E402
 
-CONFIGS = {"best": ["movenet", "movenet-mirrored", "mediapipe", "mediapipe-mirrored", "efficientpose"], "fast": ["movenet", "mediapipe"]}
+CONFIGS = {"best": ["movenet", "movenet-mirrored", "mediapipe", "mediapipe-mirrored", "efficientpose", "movenet-zoom"],
+           "fast": ["movenet", "mediapipe", "movenet-zoom"]}
 LABEL = {"movenet": "MoveNet Thunder", "movenet-mirrored": "MoveNet Thunder on the mirrored crop", "mediapipe": "MediaPipe Pose (heavy)",
-         "mediapipe-mirrored": "MediaPipe Pose (heavy) on the mirrored crop", "efficientpose": "EfficientPose II"}
+         "mediapipe-mirrored": "MediaPipe Pose (heavy) on the mirrored crop", "efficientpose": "EfficientPose II", "movenet-zoom": "MoveNet Thunder on a close-up of the arms"}
 SOFT_RADIUS = 0.1  # average the answers within 10% of body height of the winner
 
 
@@ -39,6 +40,11 @@ def candidate_sets(set_name, names):
         return None if c is None else [[math.nan if v is None else v for v in row] for row in c]
 
     return {k: [clean(v[n]) if v else None for n in names] for k, v in preds.items()}
+
+
+def stored_name(name, quality):
+    """The close-up's stored answers depend on the configuration (run.py ZOOMS)."""
+    return f"{name}@{quality}" if name == "movenet-zoom" else name
 
 
 def examples(people, cands):
@@ -71,7 +77,8 @@ def main(argv=None):
     general, batters = load_set("general"), load_set("batters")
     val = [p for p in batters if p["split"] == "val2017"]
     for quality, names in CONFIGS.items():
-        X, y = examples(general, candidate_sets("general", names))
+        stored = [stored_name(n, quality) for n in names]
+        X, y = examples(general, candidate_sets("general", stored))
         clf = LogisticRegression(max_iter=5000, C=1.0).fit(X, y)
         referee = {
             "version": 2,
@@ -83,7 +90,7 @@ def main(argv=None):
             "bias": round(float(clf.intercept_[0]), 6),
             "weights": [round(float(w), 6) for w in clf.coef_[0]],
         }
-        cands = candidate_sets("batters", names)
+        cands = candidate_sets("batters", stored)
         fused = {}
         for k, C in cands.items():
             res = fuse(C, referee) if C else None

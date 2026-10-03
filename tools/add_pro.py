@@ -57,7 +57,7 @@ def parse_args(argv=None):
     p.add_argument("--target-x", type=float, help="hitter's rough horizontal position (0 = left edge, 1 = right) if several people are in frame")
     p.add_argument("--model", choices=["best", "fast", "heavy", "full", "lite"], default="best",
                    help="pose tracking: best (default; MoveNet + MediaPipe on the hitter's crop and its mirror image, "
-                        "cross-checked), fast (each model once, about twice as fast), or heavy/full/lite (the older "
+                        "cross-checked), fast (MoveNet and MediaPipe once each, about three times as fast), or heavy/full/lite (the older "
                         "MediaPipe-only method)")
     p.add_argument("--max-frames", type=int, default=240,
                    help="analyze at most this many frames of the clip, skipping evenly (default 240). Slow-motion clips have "

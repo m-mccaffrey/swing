@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { fuse, consensusHeight, featureVector, rawFeatures } from '../src/core/referee.js';
+import { fuse, consensusHeight, featureVector, rawFeatures, zoomCrop, ZOOM_SCALE } from '../src/core/referee.js';
 import { KP, COCO_TO_BODY25, fusedToBody25, emptyFrame, setKp, kx, ky, kc } from '../src/core/body25.js';
 import { PoseEngine, squareFromBox } from '../src/pose/engine.js';
 
@@ -62,14 +62,26 @@ test('answers that agree with the winner are averaged', () => {
 
 test('the referee copes with missing models and joints', () => {
   const r = referee('fast');
+  const K = r.candidates.length;
   const a = withConf(person());
   a[15] = [NaN, NaN, NaN];
-  const { keypoints, chosen } = fuse([a, null], r);
+  const others = Array.from({ length: K - 1 }, () => null);
+  const { keypoints, chosen } = fuse([a, ...others], r);
   assert.equal(chosen[0], 0);
   assert.equal(chosen[15], -1); // nobody saw the ankle
   assert.ok(Number.isNaN(keypoints[15][0]) && keypoints[15][2] === 0);
-  assert.equal(fuse([null, null], r), null);
-  assert.throws(() => fuse([a], r), /expects 2/);
+  assert.equal(fuse([null, ...others], r), null);
+  assert.throws(() => fuse([a], r), new RegExp(`expects ${K}`));
+});
+
+test('the zoomed look at the arms is centred on the consensus elbows and wrists', () => {
+  const p = withConf(person());
+  const q = withConf(person(10));
+  const z = zoomCrop([p, null, q]);
+  // Elbows and wrists of the median pose (x shifted by 5) average to (300 + 5, 252.5).
+  assert.ok(Math.abs(z.x0 + z.side / 2 - 305) < 1e-9 && Math.abs(z.y0 + z.side / 2 - 252.5) < 1e-9);
+  assert.ok(Math.abs(z.side - Math.max(ZOOM_SCALE * (490 - 92) * 1.1, 1.4 * 110)) < 1e-9);
+  assert.equal(zoomCrop([null, null]), null);
 });
 
 test('body height comes from the consensus pose', () => {

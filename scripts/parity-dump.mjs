@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { archetypeEntry, demoUserSwing, makeSpec, renderSwing } from '../src/core/synth.js';
 import { entryFrames } from '../src/core/db.js';
 import { swapLR, LR_GROUPS, NUM_KP, COCO_TO_BODY25, fusedToBody25 } from '../src/core/body25.js';
-import { fuse } from '../src/core/referee.js';
+import { fuse, zoomCrop } from '../src/core/referee.js';
 import { suggestStanceFrame, detectPitcherSide, canonicalize, estimateSwingFps } from '../src/core/sequence.js';
 import { detectPhases } from '../src/core/phases.js';
 import { hiddenHand, blurredHands, wrongHand } from './lib/sweep.mjs';
@@ -42,7 +42,7 @@ function refereeCases() {
       }
       const res = fuse(cands, referee);
       const mp = n % 2 ? f : null; // feet from a MediaPipe frame on every other case
-      out.push({ quality, cands, mp, result: res, body25: res && fusedToBody25(res.keypoints, mp) });
+      out.push({ quality, cands, mp, result: res, body25: res && fusedToBody25(res.keypoints, mp), zoom: zoomCrop(cands) });
     }
     out.push({ quality, cands: Array.from({ length: K }, () => null), mp: null, result: fuse(Array.from({ length: K }, () => null), referee), body25: null });
   }

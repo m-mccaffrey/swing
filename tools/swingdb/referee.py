@@ -8,7 +8,11 @@ NGROUP = 7
 
 
 def _fin(v):
-    return isinstance(v, (int, float)) and math.isfinite(v)
+    """A finite number (numpy scalars included; None or text are not)."""
+    try:
+        return math.isfinite(v)
+    except TypeError:
+        return False
 
 
 def _median(values):
@@ -26,6 +30,29 @@ def consensus_height(cands):
         if _fin(y):
             lo, hi = min(lo, y), max(hi, y)
     return max(1.0, (hi - lo) * 1.1)
+
+
+ZOOM_SCALE = 0.6
+ZOOM_JOINTS = (5, 6, 7, 8, 9, 10)
+
+
+def zoom_crop(cands):
+    """(x0, y0, side) of the zoomed look at the arms, or None. Mirrors zoomCrop() in referee.js."""
+    full = [c for c in cands if c is not None]
+    if not full:
+        return None
+    med = [(_median([c[j][0] for c in full]), _median([c[j][1] for c in full])) for j in range(17)]
+    ys = [p[1] for p in med if _fin(p[1])]
+    if len(ys) < 2:
+        return None
+    h = max(1.0, (max(ys) - min(ys)) * 1.1)
+    pts = [med[j] for j in (7, 8, 9, 10) if _fin(med[j][0]) and _fin(med[j][1])]
+    if not pts:
+        return None
+    xs, yy = [p[0] for p in pts], [p[1] for p in pts]
+    cx, cy = sum(xs) / len(xs), sum(yy) / len(yy)
+    side = max(ZOOM_SCALE * h, 1.4 * max(max(xs) - min(xs), max(yy) - min(yy)))
+    return cx - side / 2, cy - side / 2, side
 
 
 def raw_features(cands, c, j, h):

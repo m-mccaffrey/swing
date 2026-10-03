@@ -6,12 +6,13 @@
 //      tracking is lost; otherwise the crop follows the previous frame's pose.
 //   2. On the crop, the models the referee was trained with: MoveNet Thunder
 //      (TensorFlow.js) and MediaPipe Pose (heavy), each also on the mirrored
-//      crop, plus EfficientPose ("best"), or MoveNet and MediaPipe once ("fast").
+//      crop, plus EfficientPose ("best"), or MoveNet and MediaPipe once ("fast");
+//      then MoveNet again on a close-up of the arms where those answers put them.
 //   3. The referee (models/referee-*.json) picks each joint's best answer and
 //      averages it with the answers that agree.
 //   4. BODY_25: the fused joints plus MediaPipe's heels and toes.
 
-import { fuse } from '../core/referee.js';
+import { fuse, zoomCrop, ZOOM_JOINTS } from '../core/referee.js';
 import { emptyFrame, fusedToBody25, mediapipeToBody25 } from '../core/body25.js';
 
 const TF_VERSION = '4.22.0';
@@ -298,9 +299,14 @@ export class PoseEngine {
     const cands = [];
     const mp33 = [];
     for (const name of this.referee.candidates) {
-      const [model, mirrored] = name.split('-');
-      const mirror = Boolean(mirrored);
-      if (model === 'mediapipe') {
+      const [model, variant] = name.split('-');
+      const mirror = variant === 'mirrored';
+      if (name === 'movenet-zoom') {
+        // A closer look at the arms, around where the answers so far put them.
+        const zoom = zoomCrop(cands);
+        const p = zoom ? await this.movenetAt(src, zoom, false) : null;
+        cands.push(p && p.map((q, j) => (ZOOM_JOINTS.includes(j) ? q : [NaN, NaN, NaN])));
+      } else if (model === 'mediapipe') {
         const q = this.mediapipeAt(src, this.crop, mirror);
         mp33.push(q);
         cands.push(q ? MP_TO_COCO.map((i) => q[i]) : null);

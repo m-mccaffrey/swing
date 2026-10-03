@@ -39,6 +39,32 @@ export function consensusHeight(cands) {
   return Math.max(1, (hi - lo) * 1.1);
 }
 
+export const ZOOM_SCALE = 0.6; // zoomed crop: at least this fraction of body height
+export const ZOOM_JOINTS = [5, 6, 7, 8, 9, 10]; // what the zoomed pass answers for: shoulders, elbows, wrists
+
+/**
+ * Square crop {x0, y0, side} for the zoomed look at the arms: centred on the
+ * elbows and wrists of the consensus pose (per-joint median of the candidates
+ * so far), at least ZOOM_SCALE body heights and 1.4 times the arms' spread.
+ * Null if there is no consensus. Mirrored by zoom_crop() in referee.py.
+ */
+export function zoomCrop(cands) {
+  const full = cands.filter(Boolean);
+  if (!full.length) return null;
+  const med = Array.from({ length: 17 }, (_, j) => [median(full.map((c) => c[j][0])), median(full.map((c) => c[j][1]))]);
+  const ys = med.map((p) => p[1]).filter(finite);
+  if (ys.length < 2) return null;
+  const h = Math.max(1, (Math.max(...ys) - Math.min(...ys)) * 1.1);
+  const pts = [7, 8, 9, 10].map((j) => med[j]).filter((p) => finite(p[0]) && finite(p[1]));
+  if (!pts.length) return null;
+  const xs = pts.map((p) => p[0]);
+  const yy = pts.map((p) => p[1]);
+  const cx = xs.reduce((a, v) => a + v, 0) / xs.length;
+  const cy = yy.reduce((a, v) => a + v, 0) / yy.length;
+  const side = Math.max(ZOOM_SCALE * h, 1.4 * Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...yy) - Math.min(...yy)));
+  return { x0: cx - side / 2, y0: cy - side / 2, side };
+}
+
 /** Raw features of candidate c at joint j (same order as the training code). */
 export function rawFeatures(cands, c, j, h) {
   const [x, y, conf] = cands[c][j];

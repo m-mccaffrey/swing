@@ -6,14 +6,15 @@ Per frame:
      tracking is lost; otherwise the crop follows the previous frame's pose.
   2. On the crop, the models the referee was trained with: MoveNet Thunder
      and MediaPipe Pose (heavy), each also on the mirrored crop, plus
-     EfficientPose ("best"), or MoveNet and MediaPipe once each ("fast").
+     EfficientPose ("best"), or MoveNet and MediaPipe once each ("fast"); then
+     MoveNet again on a close-up of the arms where those answers put them.
   3. The referee (models/referee-*.json) picks each joint's best answer and
      averages it with the answers that agree.
   4. BODY_25: the fused joints plus MediaPipe's heels and toes, moved with the
      fused ankles.
 
 Measured on human-labelled COCO baseball batters it never saw (tools/posebench):
-wrists within 5% of body height 88% (best) / 87% (fast) of the time, against
+wrists within 5% of body height 89% (best) / 87% (fast) of the time, against
 60% for MediaPipe alone on the whole frame. The browser runs the same models
 and referee (src/pose/engine.js).
 """
@@ -25,7 +26,7 @@ from pathlib import Path
 import numpy as np
 
 from .body25 import empty_frame, fused_to_body25, mediapipe_to_body25
-from .referee import fuse
+from .referee import ZOOM_JOINTS, fuse, zoom_crop
 
 ROOT = Path(__file__).resolve().parents[2]
 MODELS = ROOT / "models"
@@ -240,6 +241,7 @@ class PoseEngine:
     def process(self, bgr):
         """BODY_25 frame (pixels) of the hitter in this frame (empty if not found)."""
         self.height, self.width = bgr.shape[:2]
+        self.last_candidates = None
         if self.crop is None or self.since_check >= RECHECK:
             box = self._pick(self.people(bgr))
             if box is not None:
@@ -249,16 +251,23 @@ class PoseEngine:
             return empty_frame()
         self.since_check += 1
         cands, mp33 = [], []
+        self.last_candidates = cands  # the answers the referee chose between (as engine.js lastCandidates)
         for name in self.referee["candidates"]:
-            model, _, mirrored = name.partition("-")
-            if model == "mediapipe":
-                q = self._mediapipe(bgr, self.crop, bool(mirrored))
+            model, _, variant = name.partition("-")
+            mirrored = variant == "mirrored"
+            if name == "movenet-zoom":
+                # A closer look at the arms, around where the answers so far put them.
+                zoom = zoom_crop(cands)
+                p = None if zoom is None else self._movenet(bgr, zoom, False)
+                cands.append(None if p is None else [p[j].tolist() if j in ZOOM_JOINTS else [math.nan] * 3 for j in range(17)])
+            elif model == "mediapipe":
+                q = self._mediapipe(bgr, self.crop, mirrored)
                 mp33.append(q)
                 cands.append(None if q is None else q[MP_TO_COCO].tolist())
             elif model == "movenet":
-                cands.append(self._movenet(bgr, self.crop, bool(mirrored)).tolist())
+                cands.append(self._movenet(bgr, self.crop, mirrored).tolist())
             elif model == "efficientpose":
-                cands.append(self._effpose(bgr, self.crop, bool(mirrored)).tolist())
+                cands.append(self._effpose(bgr, self.crop, mirrored).tolist())
             else:
                 raise ValueError(f"unknown referee candidate {name}")
         res = fuse(cands, self.referee)

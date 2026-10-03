@@ -75,13 +75,20 @@ class RefereeParity(unittest.TestCase):
 
     def test_fuse_and_body25_match(self):
         from swingdb.body25 import fused_to_body25
-        from swingdb.referee import fuse
+        from swingdb.referee import fuse, zoom_crop
 
         referees = {q: json.loads((ROOT / "models" / f"referee-{q}.json").read_text()) for q in ("best", "fast")}
         self.assertGreater(len(self.cases), 20)
         for n, c in enumerate(self.cases):
             with self.subTest(case=n, quality=c["quality"]):
-                res = fuse([None if cand is None else _nan(cand) for cand in c["cands"]], referees[c["quality"]])
+                cands = [None if cand is None else _nan(cand) for cand in c["cands"]]
+                zoom = zoom_crop(cands)
+                if c.get("zoom") is None:
+                    self.assertIsNone(zoom)
+                else:
+                    for u, v in zip(zoom, (c["zoom"]["x0"], c["zoom"]["y0"], c["zoom"]["side"])):
+                        self.assertAlmostEqual(u, v, places=9)
+                res = fuse(cands, referees[c["quality"]])
                 if c["result"] is None:
                     self.assertIsNone(res)
                     continue

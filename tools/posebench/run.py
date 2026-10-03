@@ -27,6 +27,8 @@ sys.path.insert(0, str(HERE))
 from metrics import DATA, load_set, report, score  # noqa: E402
 
 CANDIDATES = ["movenet", "movenet-mirrored", "mediapipe", "mediapipe-mirrored", "efficientpose"]
+# The close-up of the arms depends on the answers before it: one per configuration (train_referee.CONFIGS).
+ZOOMS = {"movenet-zoom@best": CANDIDATES, "movenet-zoom@fast": ["movenet", "mediapipe"]}
 MODELS = ROOT / ".cache" / "models"
 
 _engine = None
@@ -72,14 +74,21 @@ def _predict(p):
         crop = square_from_box(*p["bbox"])  # the labelled box, as the referee was trained
         out = {}
         for name in CANDIDATES:
-            model, _, mirrored = name.partition("-")
+            model, _, variant = name.partition("-")
+            mirrored = variant == "mirrored"
             if model == "movenet":
-                out[name] = e._movenet(img, crop, bool(mirrored)).tolist()
+                out[name] = e._movenet(img, crop, mirrored).tolist()
             elif model == "efficientpose":
-                out[name] = e._effpose(img, crop, bool(mirrored)).tolist()
+                out[name] = e._effpose(img, crop, mirrored).tolist()
             else:
-                q = e._mediapipe(img, crop, bool(mirrored))
+                q = e._mediapipe(img, crop, mirrored)
                 out[name] = None if q is None else q[MP_TO_COCO].tolist()
+        from swingdb.referee import ZOOM_JOINTS, zoom_crop
+
+        for name, before in ZOOMS.items():
+            zoom = zoom_crop([out[n] for n in before])
+            p = None if zoom is None else e._movenet(img, zoom, False)
+            out[name] = None if p is None else [p[j].tolist() if j in ZOOM_JOINTS else [float("nan")] * 3 for j in range(17)]
         return out
     if _method == "mediapipe-full-frame":
         import mediapipe as mp
@@ -136,6 +145,7 @@ def main(argv=None):
     if args.method == "candidates":
         for name in CANDIDATES:
             print(report(f"{name} (labelled box)", score({k: v and v[name] for k, v in preds.items()}, people)))
+        print("(the close-ups, movenet-zoom@*, only answer for the arms)")
         return
     print(report(f"{args.method} [{args.set}]", score(preds, people)))
     held_out = [p for p in people if p["split"] == "val2017"]

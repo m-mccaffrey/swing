@@ -43,9 +43,10 @@ If you use "Deploy from a branch" instead, the app still works. It loads MediaPi
 Everything downstream depends on where the joints are, so this is where the accuracy work went. For each frame:
 
 1. **Find the hitter.** A person detector (EfficientDet-Lite0) looks for people at the start of the clip, every 30 frames after that, and whenever the hitter is lost. In between, a square crop follows the previous frame's pose. The crop can only move or resize a little per frame, so one bad frame can't throw it off. After losing the hitter it only accepts someone near where they were last seen, never the catcher across the frame.
-2. **Several pose models look at the crop.** They are MoveNet Thunder, MediaPipe Pose (heavy) and EfficientPose. They were trained on different data and make different mistakes. In **Best** mode, MoveNet and MediaPipe also look at the mirror image of the crop, which changes their mistakes again.
-3. **A referee picks each joint.** It is a small logistic model (`models/referee-*.json`), trained on 2,643 people labelled by hand in COCO (no batters among them). For every joint it scores each model's answer: the model's own confidence, the distance to the other answers, how many agree with it, and which model gave it. For wrists it also looks at forearm length and the gap between the hands. The score is the probability that the answer is within 5% of body height of the truth. The most likely answer wins, averaged with the answers that agree with it, and its probability becomes the joint's confidence.
-4. **Conversion to BODY_25**, then the per-joint robust spline and the hand repair described below.
+2. **Several pose models look at the crop.** They are MoveNet Thunder, MediaPipe Pose (heavy) and EfficientPose. They were trained on different data and make different mistakes. In **Best** mode, MoveNet and MediaPipe also look at the mirror image of the crop, which changes their mistakes again. **Fast** mode runs MoveNet and MediaPipe once each.
+3. **A close-up of the arms.** MoveNet looks again at a smaller crop around the elbows and wrists, centred where the models so far put them. With the arms filling more of the picture it makes different mistakes than on the whole body, and its shoulder, elbow and wrist answers join the others.
+4. **A referee picks each joint.** It is a small logistic model (`models/referee-*.json`), trained on 2,643 people labelled by hand in COCO (no batters among them). For every joint it scores each model's answer: the model's own confidence, the distance to the other answers, how many agree with it, and which model gave it. For wrists it also looks at forearm length and the gap between the hands. The score is the probability that the answer is within 5% of body height of the truth. The most likely answer wins, averaged with the answers that agree with it, and its probability becomes the joint's confidence.
+5. **Conversion to BODY_25**, then the per-joint robust spline and the hand repair described below.
 
 Measured on COCO photos of batters, labelled by hand, against the old method (MediaPipe heavy on the whole frame):
 
@@ -53,16 +54,16 @@ Measured on COCO photos of batters, labelled by hand, against the old method (Me
 | --- | --- | --- | --- | --- |
 | **79 never seen by any model in training** (COCO val2017) | | | | |
 | Old method | 60.1% | 69.0% | 62.0% | 0.601 |
-| Fast | 87.3% | 91.8% | 84.8% | 0.878 |
-| Best | **88.0%** | **94.9%** | **91.1%** | **0.889** |
+| Fast | 87.3% | 92.4% | 83.5% | 0.884 |
+| Best | **88.6%** | **94.3%** | **89.9%** | **0.890** |
 | **All 2,254** (most from COCO train2017, which MoveNet may have trained on) | | | | |
 | Old method | 57.1% | 65.0% | 57.5% | 0.611 |
-| Fast | 79.6% | 88.2% | 81.0% | 0.850 |
-| Best | **83.0%** | **90.4%** | **84.8%** | **0.862** |
+| Fast | 81.3% | 88.4% | 82.0% | 0.852 |
+| Best | **83.3%** | **90.4%** | **84.8%** | **0.864** |
 
-In a video the spline then smooths each joint over time and drops one-frame glitches, which these single-photo numbers don't include. Speed depends on the device. With no usable GPU (WebAssembly only), one frame takes about 2 s in Best mode and 0.5 s in Fast mode. A GPU is much faster. The Python tool takes about 0.5 s per frame on a laptop CPU.
+In a video the spline then smooths each joint over time and drops one-frame glitches, which these single-photo numbers don't include. Speed depends on the device. With no usable GPU (WebAssembly only), one frame took about 2 s in Best mode and 0.75 s in Fast mode in testing. A GPU is much faster. The Python tool took about 0.7 s per frame in Best mode and 0.2 s in Fast mode on a 4-core CPU.
 
-Things that were tried and measured but not kept: larger or smaller crops, MoveNet on a wider crop as an extra answer, EfficientPose on the mirror image (+0.4 points for one more slow pass), a gradient-boosted referee (+0.5), a learned wrist-correction network (worse), and MediaPipe's hand model for the wrists (found a hand for only a third of the wrists, and was less accurate when it did).
+Things that were tried and measured but not kept: larger or smaller crops, MoveNet on a wider crop as an extra answer, EfficientPose on the mirror image (+0.4 points for one more slow pass), a mirrored close-up (+0.2), a gradient-boosted referee (+0.5), training the referee on the engine's own answers instead of answers on the labelled box (no change), a learned wrist-correction network (worse), and MediaPipe's hand model for the wrists (found a hand for only a third of the wrists, and was less accurate when it did).
 
 Reproduce the numbers, or retrain the referee, with `tools/posebench/` (see its README).
 
@@ -146,7 +147,7 @@ Useful options:
 | `--file swing.mp4` | use a local video instead of a URL |
 | `--cookies-from-browser chrome` | if YouTube asks you to sign in |
 | `--dry-run` | analyze and make the preview without touching the database |
-| `--model fast` | pose tracking: `best` (default), `fast` (about twice as fast, a little less accurate), or `heavy`/`full`/`lite` (the older MediaPipe-only method) |
+| `--model fast` | pose tracking: `best` (default), `fast` (about three times as fast, a little less accurate), or `heavy`/`full`/`lite` (the older MediaPipe-only method) |
 
 Pick clips filmed from the side, perpendicular to the pitch path, with the hitter's whole body in view. Broadcast center-field shots don't work for this.
 

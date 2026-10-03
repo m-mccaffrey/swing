@@ -14,7 +14,7 @@ python tools/posebench/run.py mediapipe-full-frame    # the old method
 python tools/posebench/run.py engine-fast
 python tools/posebench/run.py engine-best
 
-# retrain the referees (each model's answers on the labelled box, then logistic regression)
+# retrain the referees (each model's answers on the labelled box, plus MoveNet's close-up of the arms; then logistic regression)
 python tools/posebench/run.py candidates --set general
 python tools/posebench/run.py candidates --set batters
 python tools/posebench/train_referee.py               # add --write to update models/

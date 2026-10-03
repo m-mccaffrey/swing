@@ -20,8 +20,8 @@ const MODEL_BUCKET = 'https://storage.googleapis.com/mediapipe-models/';
 const DETECTOR_FILE = 'efficientdet_lite0.tflite';
 
 export const MODELS = {
-  best: { label: 'Best (two models, cross-checked)', engine: true },
-  fast: { label: 'Fast (two models)', engine: true },
+  best: { label: 'Best (three pose models, cross-checked)', engine: true },
+  fast: { label: 'Fast (two pose models)', engine: true },
   heavy: { label: 'MediaPipe only, heavy (older method)', file: 'pose_landmarker_heavy.task' },
   full: { label: 'MediaPipe only, full (older method)', file: 'pose_landmarker_full.task' },
   lite: { label: 'MediaPipe only, lite (older method)', file: 'pose_landmarker_lite.task' },
