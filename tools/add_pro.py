@@ -7,7 +7,8 @@
   python tools/add_pro.py --file swing.mp4 --name "Player Name" --bats L
 
 It downloads just that clip (video only), finds the hitter's pose in every
-frame with MediaPipe (same model as the web app), converts it to OpenPose
+frame with the pose engine (same pipeline as the web app: person detector,
+crop tracking, MoveNet + MediaPipe, learned referee), converts it to OpenPose
 BODY_25, auto-detects the pitcher side, stance and swing phases, and writes
 data/pros/<id>.json plus an entry in data/pros/index.json. The video is
 deleted afterwards; only keypoints are kept. A preview image of the six phase
@@ -54,7 +55,10 @@ def parse_args(argv=None):
     p.add_argument("--pitcher", choices=["left", "right"], help="side of the frame the pitcher is on (default: auto)")
     p.add_argument("--stance", type=float, help="stance time in seconds from the clip start (default: auto)")
     p.add_argument("--target-x", type=float, help="hitter's rough horizontal position (0 = left edge, 1 = right) if several people are in frame")
-    p.add_argument("--model", choices=["lite", "full", "heavy"], default="heavy", help="pose model (default: heavy, most accurate)")
+    p.add_argument("--model", choices=["best", "fast", "heavy", "full", "lite"], default="best",
+                   help="pose tracking: best (default; MoveNet + MediaPipe on the hitter's crop and its mirror image, "
+                        "cross-checked), fast (each model once, about twice as fast), or heavy/full/lite (the older "
+                        "MediaPipe-only method)")
     p.add_argument("--max-frames", type=int, default=240,
                    help="analyze at most this many frames of the clip, skipping evenly (default 240). Slow-motion clips have "
                         "far more frames than a swing needs; the swing's own clock keeps the comparison right either way")
@@ -79,6 +83,9 @@ def main(argv=None, *, thumb_height=None):
     args = parse_args(argv)
     need("cv2", "mediapipe")
     need("mediapipe", "mediapipe")
+    engine_mode = args.model in ("best", "fast")
+    if engine_mode:
+        need("onnxruntime", "onnxruntime")
     if args.url:
         need("yt_dlp", "yt-dlp")
     from swingdb import pose as pose_mod
@@ -135,22 +142,31 @@ def main(argv=None, *, thumb_height=None):
             print(f"Analyzing every frame (~{frames_est} frames)")
 
         # 2. Pose in every frame.
-        model = pose_mod.ensure_model(args.model, cache / "models")
-        extractor = pose_mod.PoseExtractor(model)
-        people, times, thumbs, thumb_scale, t0 = [], [], [], 1.0, time.time()
+        model = pose_mod.ensure_model("heavy" if engine_mode else args.model, cache / "models")
+        if engine_mode:
+            from swingdb.engine import PoseEngine
+
+            tracker = PoseEngine(model, quality=args.model, target_x=args.target_x)
+        else:
+            tracker = pose_mod.PoseExtractor(model)
+        frames, people, times, thumbs, thumb_scale, t0 = [], [], [], [], 1.0, time.time()
         for i, t, frame in video.read_frames(path, read_start, read_end, step):
-            people.append(extractor.detect(frame, t))
+            if engine_mode:
+                frames.append(tracker.process(frame))
+            else:
+                people.append(tracker.detect(frame, t))
             times.append(t)
             if thumb_height:
                 thumb_scale = min(1.0, thumb_height / frame.shape[0])
                 thumbs.append(preview.encode_thumb(frame, thumb_scale))
             if i % 15 == 0:
                 print(f"\r  pose: frame {i + 1}", end="", flush=True)
-        extractor.close()
-        print(f"\r  pose: {len(people)} frames in {time.time() - t0:.1f} s")
-        if len(people) < 10:
+        tracker.close()
+        print(f"\r  pose: {len(times)} frames in {time.time() - t0:.1f} s")
+        if len(times) < 10:
             sys.exit("Fewer than 10 frames in that range; check --start/--end.")
-        frames = track_hitter(people, width, args.target_x)
+        if not engine_mode:
+            frames = track_hitter(people, width, args.target_x)
         coverage = detection_coverage(frames)
         if coverage < 0.5:
             print(f"  warning: the hitter was found in only {coverage:.0%} of frames. "

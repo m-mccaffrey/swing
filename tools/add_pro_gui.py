@@ -195,8 +195,9 @@ class App:
 
         # Options
         section("4. Options")
-        self.model = tk.StringVar(value="heavy")
-        row("Pose model", ttk.Combobox(form, textvariable=self.model, values=["heavy", "full", "lite"], state="readonly", width=18), "heavy is best")
+        self.model = tk.StringVar(value="best")
+        row("Pose tracking", ttk.Combobox(form, textvariable=self.model, values=["best", "fast", "heavy", "full", "lite"], state="readonly", width=18),
+            "best is most accurate; heavy/full/lite = older MediaPipe-only")
         self.max_frames = tk.StringVar(value="240")
         row("Max frames", ttk.Spinbox(form, textvariable=self.max_frames, from_=0, to=5000, increment=60, width=8), "0 = every frame")
         self.cookies = tk.StringVar(value="None")
@@ -397,7 +398,7 @@ class App:
         self.open_prev_btn.state(["disabled"])
         self.git_btn.state(["disabled"])
         self.progress.start(12)
-        self.status.config(text="Working… (the first run downloads the pose model)")
+        self.status.config(text="Working… (the first run downloads the pose models)")
         self.tabs.select(self.log_tab)
         self._append("$ python tools/add_pro.py " + " ".join(f'"{a}"' if " " in a else a for a in argv) + "\n")
         threading.Thread(target=self._worker, args=(argv,), daemon=True).start()

@@ -3,11 +3,12 @@
 Compare your baseball swing to MLB swings, in the browser.
 
 1. Upload a **side-view** video of your swing (camera at 90° to the pitch path).
-2. Pose estimation runs locally (MediaPipe Pose Landmarker). The landmarks are converted to the **OpenPose BODY_25** format.
+2. Pose tracking runs locally. A person detector finds the hitter and a tracker follows them. Several pose models (MoveNet, MediaPipe Pose, EfficientPose) look at the hitter, and a referee trained on human-labelled photos picks each joint's best answer (see [Pose tracking](#pose-tracking)). The joints are converted to the **OpenPose BODY_25** format.
 3. Pick the frame with your **starting stance**. It is matched against every pro stance in the database, and the closest one is your match.
 4. The rest of your swing is lined up with the pro's at six **beats**: stance, load, foot plant, contact, extension and finish. Time is stretched between them, so a slower or quicker swing, a different frame rate or slow motion all compare the same. About 28 checks then produce phase-by-phase **feedback** on positions: stride, head movement, hand load, front-leg brace, spine tilt, hip and shoulder turn, contact point, extension and finish.
 
 - **Click any piece of advice** (feedback row, priority card, "matches" pill or table row). The player jumps to the exact pair of frames that check compared, rings the joints it measured, and draws the stance position with an arrow for movements measured from the stance. You can check that every claim is grounded in the poses.
+- **Fix a joint.** If the tracking puts a joint in the wrong place, press **Fix a joint** on the stance step (or **Fix it on this frame** under the results video), scrub to the frame and drag the joint to where it really is. The frames around it follow, and the analysis goes through the point you placed (see [Fixing the tracking by hand](#fixing-the-tracking-by-hand)).
 - **Adjust the beats.** The beats are detected automatically, and detection can miss. Click a beat chip under the video (or pick it in the beat editor), find the right frame, and press **Set to the frame shown**. The comparison and feedback update right away, and the edited beats are saved with the swing.
 - **Saved swings:** every analyzed swing is kept in the browser's IndexedDB: poses, stance pick, pitcher side, height, adjusted beats and, if there is room, the video. Reopening one goes straight to the results with no upload and no re-analysis.
 
@@ -19,7 +20,7 @@ Videos never leave the device. The site is plain static files (no build step to 
 
 ## Deploying to GitHub Pages
 
-`.github/workflows/pages.yml` runs the tests and builds `dist/` on every push. Pushes to the default branch are also deployed. The build vendors the MediaPipe runtime and downloads the pose models, so the live site does not depend on a CDN.
+`.github/workflows/pages.yml` runs the tests and builds `dist/` on every push. Pushes to the default branch are also deployed. The build vendors the MediaPipe runtime and TensorFlow.js and downloads the MediaPipe models, so the live site does not depend on a CDN.
 
 One-time setup, done by a repo admin:
 
@@ -28,7 +29,7 @@ One-time setup, done by a repo admin:
 
 The site will be at `https://<owner>.github.io/<repo>/`.
 
-If you use "Deploy from a branch" instead, the app still works. It loads MediaPipe from jsDelivr and the models from Google's model bucket.
+If you use "Deploy from a branch" instead, the app still works. It loads MediaPipe and TensorFlow.js from jsDelivr and the MediaPipe models from Google's model bucket. The pose engine's own models are in `models/`, which is served as is.
 
 ## Filming tips (what the analysis assumes)
 
@@ -37,11 +38,49 @@ If you use "Deploy from a branch" instead, the app still works. It loads MediaPi
 - Any frame rate works, including phone slow motion, and there is nothing to set: the swing is timed by its own hand speed. 60 fps or slow motion gives a sharper look at contact.
 - **Sharp hands.** Film in bright light (daylight is best) or in slow-motion mode. Both use a short exposure, which freezes the hands. In dim light the hands smear into a blur at launch and the pose model has to guess where they are.
 
+## Pose tracking
+
+Everything downstream depends on where the joints are, so this is where the accuracy work went. For each frame:
+
+1. **Find the hitter.** A person detector (EfficientDet-Lite0) looks for people at the start of the clip, every 30 frames after that, and whenever the hitter is lost. In between, a square crop follows the previous frame's pose. The crop can only move or resize a little per frame, so one bad frame can't throw it off. After losing the hitter it only accepts someone near where they were last seen, never the catcher across the frame.
+2. **Several pose models look at the crop.** They are MoveNet Thunder, MediaPipe Pose (heavy) and EfficientPose. They were trained on different data and make different mistakes. In **Best** mode, MoveNet and MediaPipe also look at the mirror image of the crop, which changes their mistakes again.
+3. **A referee picks each joint.** It is a small logistic model (`models/referee-*.json`), trained on 2,643 people labelled by hand in COCO (no batters among them). For every joint it scores each model's answer: the model's own confidence, the distance to the other answers, how many agree with it, and which model gave it. For wrists it also looks at forearm length and the gap between the hands. The score is the probability that the answer is within 5% of body height of the truth. The most likely answer wins, averaged with the answers that agree with it, and its probability becomes the joint's confidence.
+4. **Conversion to BODY_25**, then the per-joint robust spline and the hand repair described below.
+
+Measured on COCO photos of batters, labelled by hand, against the old method (MediaPipe heavy on the whole frame):
+
+| Batters labelled by hand | Wrists within 5% of body height | Wrists within 10% | Grip (between the hands) within 5% | Keypoint similarity (OKS) |
+| --- | --- | --- | --- | --- |
+| **79 never seen by any model in training** (COCO val2017) | | | | |
+| Old method | 60.1% | 69.0% | 62.0% | 0.601 |
+| Fast | 87.3% | 91.8% | 84.8% | 0.878 |
+| Best | **88.0%** | **94.9%** | **91.1%** | **0.889** |
+| **All 2,254** (most from COCO train2017, which MoveNet may have trained on) | | | | |
+| Old method | 57.1% | 65.0% | 57.5% | 0.611 |
+| Fast | 79.6% | 88.2% | 81.0% | 0.850 |
+| Best | **83.0%** | **90.4%** | **84.8%** | **0.862** |
+
+In a video the spline then smooths each joint over time and drops one-frame glitches, which these single-photo numbers don't include. Speed depends on the device. With no usable GPU (WebAssembly only), one frame takes about 2 s in Best mode and 0.5 s in Fast mode. A GPU is much faster. The Python tool takes about 0.5 s per frame on a laptop CPU.
+
+Things that were tried and measured but not kept: larger or smaller crops, MoveNet on a wider crop as an extra answer, EfficientPose on the mirror image (+0.4 points for one more slow pass), a gradient-boosted referee (+0.5), a learned wrist-correction network (worse), and MediaPipe's hand model for the wrists (found a hand for only a third of the wrists, and was less accurate when it did).
+
+Reproduce the numbers, or retrain the referee, with `tools/posebench/` (see its README).
+
+### Fixing the tracking by hand
+
+No tracker is right on every frame: a hand hidden behind the body, a blurred bat at launch. When a joint is wrong, drag it to the right place (**Fix a joint**). What happens then (`src/core/fix.js`):
+
+- The point you placed is trusted. The smoothing spline goes through it, and neither hand repair nor left/right repair moves or relabels it. If the other hand was lost on that frame, it is put next to yours.
+- A mistake usually lasts several frames, so the frames around yours are re-picked from the pose models' other answers, which are kept from the analysis. Going outward from your point, each frame takes the answer nearest to where the joint is heading. This stops when the tracker's own answer agrees again for two frames, when no answer is close, half a second away, or at your next fix of that joint.
+- Your fixes are saved with the swing and marked with a white square. **Undo last fix** removes the most recent one.
+
+Models and licenses: [MoveNet](https://www.tensorflow.org/hub/tutorials/movenet) (Google, Apache 2.0) and [EfficientPose](https://github.com/daniegr/EfficientPose) (Apache 2.0), in the TensorFlow.js conversions from [@vladmandic/human-models](https://www.npmjs.com/package/@vladmandic/human-models) (MIT), with ONNX copies converted from those for the Python tool. [MediaPipe Pose Landmarker and EfficientDet-Lite0](https://ai.google.dev/edge/mediapipe/solutions/guide) (Google, Apache 2.0). The referees are trained on [COCO](https://cocodataset.org/) keypoint annotations (CC BY 4.0).
+
 ## How it works
 
 | Step | Module |
 | --- | --- |
-| MediaPipe 33 landmarks → BODY_25 (Neck = shoulder midpoint, MidHip = hip midpoint, heels/toes mapped) | `src/core/body25.js` |
+| Pose tracking: person detector and crop tracker, several pose models and a learned referee per joint (see [Pose tracking](#pose-tracking)), then BODY_25 (Neck = shoulder midpoint, MidHip = hip midpoint, heels and toes from MediaPipe moved with the fused ankles) | `src/pose/engine.js`, `src/core/referee.js`, `src/core/body25.js` |
 | Canonicalization: flip so the pitcher is to the right, relabel joints as **front/back** side (so left- and right-handed hitters, chest-view and back-view videos all compare directly), repair left/right label flicker, then fit each joint's track with a robust smoothing spline that penalizes sudden acceleration, ignores one-frame jumps and bridges short gaps along the curve (`robustSpline`), then normalize to the stance MidHip and **torso length** | `src/core/sequence.js` |
 | Swing clock: the hands' fast burst (speed above 25% of its peak) lasts a fixed 0.586 *swing-seconds*, which gives the frames per swing-second for every time window in the analysis. Frame rate, slow motion and tempo need no input. When beats are known (pro entries, or beats you set by hand) and the hands were too poorly tracked to time the swing, the clock comes from the beat spacing instead | `src/core/sequence.js` (`estimateSwingFps`) |
 | Hand repair: both hands hold the bat until after contact. Until shortly after the hands' peak speed, a doubtful wrist (low confidence, a forearm length far from usual, or a sudden jump while the other hand moves on smoothly) is placed next to the believable one, at the hands' spacing interpolated from frames where both were seen. Two doubtful wrists that agree are kept. Repaired points are drawn hollow, and **Pose-model points** under the player shows the model's raw output. Hand speed, which locates contact, is smoothed over 50 ms so a briefly misplaced hand doesn't look like a burst of speed | `src/core/sequence.js` (`repairHands`), `src/core/metrics.js` |
@@ -68,7 +107,7 @@ Built-in corrections the sweep relies on:
 
 - Keep the camera within about 10° of perpendicular to the pitch path. Further off-axis (the sweep tests 25°), the 2D picture changes in ways one camera can't undo.
 - A single side camera sees the swing in 2D. Rotation and joint angles are *apparent* values in the camera plane. They are most meaningful when you compare against pros filmed from the same kind of view.
-- MediaPipe and OpenPose place some keypoints slightly differently (for example the hips and the neck). For the most consistent comparisons, build pro entries with the in-app builder, which uses the same pose model as user swings.
+- OpenPose places some keypoints slightly differently from the models used here (for example the hips and the neck). For the most consistent comparisons, build pro entries with the Python tool or the in-app builder. Both use the same pose engine as user swings.
 - Tempo and rhythm are not judged. Time is stretched to line up the beats, so the feedback is about positions at each moment of the swing.
 - The feedback is a comparison with one pro, not an absolute grade. Different good hitters do things differently. Use the ranking to pick a comparison that suits you.
 
@@ -79,7 +118,7 @@ Built-in corrections the sweep relies on:
 Run this on your own computer. YouTube often blocks downloads from cloud servers, so a home connection works best.
 
 ```sh
-pip install -r tools/requirements.txt      # mediapipe + yt-dlp (Python 3.9+); ffmpeg on PATH recommended
+pip install -r tools/requirements.txt      # mediapipe, onnxruntime, yt-dlp (Python 3.9+); ffmpeg on PATH recommended
 
 python tools/add_pro.py "https://www.youtube.com/watch?v=VIDEO_ID" \
     --start 1:02.5 --end 1:06 --name "Player Name" --bats R --team "Team"
@@ -92,7 +131,7 @@ Prefer a window? Run `python tools/add_pro_gui.py`. It's the same tool with a fo
 What it does:
 
 1. Downloads only that time range, video only (the whole video if ffmpeg isn't installed). It uses H.264 at up to 1080p and the highest frame rate available. Slow-motion replays are fine as they are. Long or slow-motion clips are thinned evenly to at most 240 analyzed frames (`--max-frames`).
-2. Finds the hitter's pose in every frame with MediaPipe, the same model the web app uses, and converts it to OpenPose BODY_25. If several people are in the frame (catcher, umpire), it locks on to the most prominent one. Pass `--target-x 0.3` to point at the hitter instead: 0 is the left edge of the frame, 1 the right.
+2. Finds the hitter's pose in every frame with the pose engine (the same models and referee as the web app; see [Pose tracking](#pose-tracking)) and converts it to OpenPose BODY_25. If several people are in the frame (catcher, umpire), it locks on to the most prominent one and follows them. Pass `--target-x 0.3` to point at the hitter instead: 0 is the left edge of the frame, 1 the right.
 3. Measures the swing clock, then auto-detects the pitcher side, stance and beats. The logic is the same as in the browser; `tools/tests` checks the Python port against the JavaScript.
 4. Writes `data/pros/<id>.json`, adds it to `index.json` and deletes the video. Only keypoints are kept, plus the source URL and timestamps in the entry's `clip` field.
 5. Saves a preview of the six beat frames with the skeleton drawn on to `.cache/previews/<id>.jpg` (not committed). Check it. If a beat is off, fix it in the window (`add_pro_gui.py`), or load the entry in `builder.html` (**Existing database entry**), fix it there and download the corrected file over the original.
@@ -107,7 +146,7 @@ Useful options:
 | `--file swing.mp4` | use a local video instead of a URL |
 | `--cookies-from-browser chrome` | if YouTube asks you to sign in |
 | `--dry-run` | analyze and make the preview without touching the database |
-| `--model full` | faster, slightly less accurate pose model (default `heavy`) |
+| `--model fast` | pose tracking: `best` (default), `fast` (about twice as fast, a little less accurate), or `heavy`/`full`/`lite` (the older MediaPipe-only method) |
 
 Pick clips filmed from the side, perpendicular to the pitch path, with the hitter's whole body in view. Broadcast center-field shots don't work for this.
 
@@ -158,7 +197,7 @@ Only add footage you have the rights to use, and record the source in the entry.
 ## Development
 
 ```sh
-npm ci            # installs @mediapipe/tasks-vision (vendored into the build)
+npm ci            # installs @mediapipe/tasks-vision and TensorFlow.js (vendored into the build)
 npm test          # unit tests (node:test)
 npm run test:py   # Python tool tests (stdlib only; checks parity with the JS)
 npm run dev       # serve the repo at http://localhost:8080 (vendor paths mapped to node_modules)
@@ -175,12 +214,15 @@ css/styles.css             styles (light/dark)
 src/app.js                 analyze page controller
 src/builder.js             database builder controller
 src/core/                  pose format, normalization, metrics, matching, DTW, feedback, synthetic swings
-src/pose/detector.js       MediaPipe Pose Landmarker wrapper
+src/pose/engine.js         pose engine: detector, crop tracker, pose models, referee
+src/pose/detector.js       loads the engine (or MediaPipe alone) and runs it over a video
+models/                    MoveNet and EfficientPose (TensorFlow.js; ONNX for Python) and the referees
 src/ui/                    canvas drawing, SVG charts, video stage/player
 data/pros/                 pro swing database (index.json + one file per swing)
 scripts/                   build, dev server, OpenPose importer, synthetic generator
 tools/add_pro.py           YouTube/local video → pro database entry (Python)
 tools/add_pro_gui.py       the same, in a window (Tkinter)
-tools/swingdb/             its modules: pose, video, detection (port of the JS), entry writer
+tools/swingdb/             its modules: pose engine, video, detection (port of the JS), entry writer
+tools/posebench/           pose-tracking benchmark on COCO batters, and referee training
 tests/                     unit tests
 ```

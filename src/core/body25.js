@@ -122,6 +122,16 @@ export function has(f, j, minConf = 0.05) {
   return f[j * 3 + 2] > minConf;
 }
 
+/**
+ * Confidence of a point the user placed by hand (src/core/fix.js): above any
+ * model's, so it survives every step that moves points with their confidence,
+ * and the steps that would doubt it leave it alone.
+ */
+export const PIN_CONF = 2;
+export function pinned(f, j) {
+  return f[j * 3 + 2] >= PIN_CONF;
+}
+
 export function swapLR(frame, pairs = LR_PAIRS) {
   const f = frame.slice();
   for (const [a, b] of pairs) {
@@ -238,7 +248,7 @@ export function toOpenPoseJSON(frame) {
     people: [
       {
         person_id: [-1],
-        pose_keypoints_2d: frame.map((v) => Math.round(v * 1000) / 1000),
+        pose_keypoints_2d: frame.map((v, i) => Math.round((i % 3 === 2 ? Math.min(1, v) : v) * 1000) / 1000),
         face_keypoints_2d: [],
         hand_left_keypoints_2d: [],
         hand_right_keypoints_2d: [],
@@ -325,4 +335,36 @@ export function detectedCount(f, minConf = 0.3) {
   let n = 0;
   for (let j = 0; j < NUM_KP; j++) if (kc(f, j) >= minConf) n++;
   return n;
+}
+
+/** COCO-17 keypoint -> BODY_25 index. */
+export const COCO_TO_BODY25 = [0, 16, 15, 18, 17, 5, 2, 6, 3, 7, 4, 12, 9, 13, 10, 14, 11];
+const FEET = [
+  [KP.LAnkle, [KP.LBigToe, KP.LSmallToe, KP.LHeel]],
+  [KP.RAnkle, [KP.RBigToe, KP.RSmallToe, KP.RHeel]],
+];
+
+/**
+ * BODY_25 from fused COCO-17 keypoints ([x, y, prob] in pixels) plus, for the
+ * heels and toes, a MediaPipe BODY_25 frame of the same person: its feet are
+ * moved with the fused ankles. Mirrored by fused_to_body25() in tools/swingdb.
+ */
+export function fusedToBody25(fused, mpFrame = null) {
+  const f = emptyFrame();
+  COCO_TO_BODY25.forEach((j, c) => {
+    const [x, y, p] = fused[c];
+    if (Number.isFinite(x) && Number.isFinite(y)) setKp(f, j, x, y, p);
+  });
+  for (const [mid, a, b] of [[KP.Neck, KP.LShoulder, KP.RShoulder], [KP.MidHip, KP.LHip, KP.RHip]]) {
+    if (kc(f, a) > 0 && kc(f, b) > 0) setKp(f, mid, (kx(f, a) + kx(f, b)) / 2, (ky(f, a) + ky(f, b)) / 2, Math.min(kc(f, a), kc(f, b)));
+  }
+  if (mpFrame) {
+    for (const [ankle, toes] of FEET) {
+      if (!(kc(mpFrame, ankle) > 0 && kc(f, ankle) > 0)) continue;
+      const dx = kx(f, ankle) - kx(mpFrame, ankle);
+      const dy = ky(f, ankle) - ky(mpFrame, ankle);
+      for (const t of toes) if (kc(mpFrame, t) > 0) setKp(f, t, kx(mpFrame, t) + dx, ky(mpFrame, t) + dy, kc(mpFrame, t));
+    }
+  }
+  return f;
 }

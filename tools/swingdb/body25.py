@@ -216,3 +216,37 @@ def detection_coverage(frames, min_conf=0.25):
         if ok(f, 1) and ok(f, 8) and (ok(f, 4) or ok(f, 7)) and (ok(f, 11) or ok(f, 14)):
             good += 1
     return good / len(frames)
+
+
+# COCO-17 keypoint -> BODY_25 index.
+COCO_TO_BODY25 = [0, 16, 15, 18, 17, 5, 2, 6, 3, 7, 4, 12, 9, 13, 10, 14, 11]
+FEET = {"L": (KP["LAnkle"], (KP["LBigToe"], KP["LSmallToe"], KP["LHeel"])),
+        "R": (KP["RAnkle"], (KP["RBigToe"], KP["RSmallToe"], KP["RHeel"]))}
+
+
+def fused_to_body25(fused, mp_frame=None):
+    """BODY_25 from fused COCO-17 keypoints ([x, y, prob] in pixels) plus, for
+    the heels and toes, a MediaPipe BODY_25 frame of the same person: its feet
+    are moved with the fused ankles. Mirrors fusedToBody25() in body25.js."""
+    f = empty_frame()
+    for c, j in enumerate(COCO_TO_BODY25):
+        x, y, p = fused[c]
+        if math.isfinite(x) and math.isfinite(y):
+            f[j * 3], f[j * 3 + 1], f[j * 3 + 2] = x, y, p
+    for mid, (a, b) in ((KP["Neck"], (KP["LShoulder"], KP["RShoulder"])), (KP["MidHip"], (KP["LHip"], KP["RHip"]))):
+        if f[a * 3 + 2] > 0 and f[b * 3 + 2] > 0:
+            f[mid * 3] = (f[a * 3] + f[b * 3]) / 2
+            f[mid * 3 + 1] = (f[a * 3 + 1] + f[b * 3 + 1]) / 2
+            f[mid * 3 + 2] = min(f[a * 3 + 2], f[b * 3 + 2])
+    if mp_frame is not None:
+        for ankle, toes in FEET.values():
+            if not (mp_frame[ankle * 3 + 2] > 0 and f[ankle * 3 + 2] > 0):
+                continue
+            dx = f[ankle * 3] - mp_frame[ankle * 3]
+            dy = f[ankle * 3 + 1] - mp_frame[ankle * 3 + 1]
+            for t in toes:
+                if mp_frame[t * 3 + 2] > 0:
+                    f[t * 3] = mp_frame[t * 3] + dx
+                    f[t * 3 + 1] = mp_frame[t * 3 + 1] + dy
+                    f[t * 3 + 2] = mp_frame[t * 3 + 2]
+    return f

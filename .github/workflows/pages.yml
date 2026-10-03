@@ -25,11 +25,11 @@ jobs:
       - run: npm test
       - name: Python database tool tests (stdlib only)
         run: python3 -m unittest discover -s tools/tests -v
-      - name: Cache pose models
+      - name: Cache MediaPipe models
         uses: actions/cache@v4
         with:
           path: .cache/models
-          key: mediapipe-pose-models-float16-v1
+          key: mediapipe-models-pose-float16-detector-v2
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3
         with:

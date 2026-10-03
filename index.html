@@ -74,9 +74,9 @@
             <div class="settings-grid">
               <label>Pose model
                 <select id="set-quality">
-                  <option value="heavy" selected>Most accurate (heavy, recommended)</option>
-                  <option value="full">Balanced (full, faster)</option>
-                  <option value="lite">Fast (lite, least accurate)</option>
+                  <option value="best" selected>Best (two models, cross-checked; recommended)</option>
+                  <option value="fast">Fast (two models, about twice as fast)</option>
+                  <option value="heavy">MediaPipe only (older method)</option>
                 </select>
               </label>
               <label>Frames to analyze per second
@@ -123,6 +123,12 @@
             <button class="btn icon" id="stance-next" type="button" aria-label="Next frame">&#9654;</button>
           </div>
           <p class="muted small center" id="stance-frame-label"></p>
+          <div class="fix-row">
+            <button class="btn ghost" id="fix-toggle" type="button" aria-pressed="false">Fix a joint</button>
+            <button class="btn ghost" id="fix-undo" type="button" hidden>Undo last fix</button>
+            <span class="muted small" id="fix-count" role="status"></span>
+          </div>
+          <p class="muted small" id="fix-hint" hidden>Scrub to a frame where a joint is in the wrong place and drag it to where it really is. The frames around it follow: the joint is re-picked from the pose models&rsquo; other answers until the tracking agrees again. Fixed joints get a white square. Press <strong>Done fixing</strong> to go back to choosing your stance.</p>
         </div>
         <div class="stance-side">
           <p>Scrub to the moment you are set in your stance, <strong>just before</strong> your load or leg kick starts.</p>
@@ -193,7 +199,7 @@
           <label class="check"><input type="checkbox" id="ghost-toggle" checked> Pro ghost on video</label>
           <label class="check"><input type="checkbox" id="raw-toggle"> Pose-model points</label>
         </div>
-        <p class="muted small skeleton-note">Hollow dots are estimates: the pose model wasn&rsquo;t sure about that joint (often a hand hidden behind the body or blurred), so it was placed from the other hand or the frames around it. <em>Pose-model points</em> shows what the model itself reported.</p>
+        <p class="muted small skeleton-note">Hollow dots are estimates: the pose model wasn&rsquo;t sure about that joint (often a hand hidden behind the body or blurred), so it was placed from the other hand or the frames around it. <em>Pose-model points</em> shows what the model itself reported. White squares are joints you fixed by hand. <button class="btn ghost small-btn" id="fix-here" type="button">Joint in the wrong place? Fix it on this frame</button></p>
         <div class="phase-chips" id="phase-chips"></div>
         <div class="beat-editor" role="group" aria-labelledby="beat-editor-label">
           <span id="beat-editor-label" class="beat-editor-title">Beat looks off?</span>

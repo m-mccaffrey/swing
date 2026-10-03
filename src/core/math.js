@@ -214,7 +214,7 @@ export function round(v, digits = 2) {
  * non-finite value are filled by the curve.
  * Returns { xs, keep } where keep[i] is the final robustness factor (0 = rejected).
  */
-export function robustSpline(zs, w, lambda, k, iters = 3) {
+export function robustSpline(zs, w, lambda, k, iters = 3, fixed = null) {
   const n = w.length;
   const ok = (i) => w[i] > 0 && zs.every((z) => Number.isFinite(z[i]));
   const base = w.map((v, i) => (ok(i) ? v : 0));
@@ -230,7 +230,7 @@ export function robustSpline(zs, w, lambda, k, iters = 3) {
       let r2 = 0;
       for (let c = 0; c < bs.length; c++) r2 += (xs[c][i] - bs[c][i]) * (xs[c][i] - bs[c][i]);
       const u2 = r2 / (k * k);
-      keep[i] = base[i] > 0 && u2 < 1 ? (1 - u2) * (1 - u2) : 0;
+      keep[i] = base[i] > 0 && (fixed?.[i] || u2 < 1) ? (fixed?.[i] ? 1 : (1 - u2) * (1 - u2)) : 0;
     }
   }
   return { xs, keep };

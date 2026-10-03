@@ -19,6 +19,7 @@ const TYPES = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml',
   '.png': 'image/png', '.jpg': 'image/jpeg', '.wasm': 'application/wasm', '.task': 'application/octet-stream',
+  '.tflite': 'application/octet-stream', '.bin': 'application/octet-stream',
   '.mp4': 'video/mp4', '.webm': 'video/webm', '.map': 'application/json',
 };
 
@@ -26,6 +27,8 @@ const MAPS = [
   ['/vendor/mediapipe/wasm/', join(repo, 'node_modules/@mediapipe/tasks-vision/wasm/')],
   ['/vendor/mediapipe/', join(repo, 'node_modules/@mediapipe/tasks-vision/')],
   ['/vendor/models/', join(repo, '.cache/models/')],
+  ['/vendor/tfjs/', join(repo, 'node_modules/@tensorflow/tfjs/dist/')],
+  ['/vendor/tfjs/', join(repo, 'node_modules/@tensorflow/tfjs-backend-wasm/dist/')],
 ];
 
 function resolvePath(urlPath) {

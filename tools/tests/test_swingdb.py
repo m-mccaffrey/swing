@@ -21,12 +21,19 @@ from swingdb.entry import make_entry, slugify, validate_entry, write_entry  # no
 from swingdb.video import parse_time  # noqa: E402
 
 
-def js_results():
+def js_results(*args):
     node = shutil.which("node")
     if not node:
         return None
-    out = subprocess.run([node, str(ROOT / "scripts" / "parity-dump.mjs")], capture_output=True, text=True, check=True, cwd=ROOT)
+    out = subprocess.run([node, str(ROOT / "scripts" / "parity-dump.mjs"), *args], capture_output=True, text=True, check=True, cwd=ROOT)
     return json.loads(out.stdout)
+
+
+def _nan(v):
+    """JSON null (JavaScript NaN) -> nan, recursively."""
+    if isinstance(v, list):
+        return [_nan(x) for x in v]
+    return math.nan if v is None else v
 
 
 class ParityWithJavaScript(unittest.TestCase):
@@ -55,6 +62,36 @@ class ParityWithJavaScript(unittest.TestCase):
                 self.assertEqual(analysis.detect_phases(canon, swing_fps, stance), c["phases"])
                 det = analysis.auto_detect(frames, c["fps"])
                 self.assertEqual(det["phases"], c["phases"])
+
+
+class RefereeParity(unittest.TestCase):
+    """tools/swingdb/referee.py must fuse candidates exactly like src/core/referee.js."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.cases = js_results("referee")
+        if cls.cases is None:
+            raise unittest.SkipTest("node not installed")
+
+    def test_fuse_and_body25_match(self):
+        from swingdb.body25 import fused_to_body25
+        from swingdb.referee import fuse
+
+        referees = {q: json.loads((ROOT / "models" / f"referee-{q}.json").read_text()) for q in ("best", "fast")}
+        self.assertGreater(len(self.cases), 20)
+        for n, c in enumerate(self.cases):
+            with self.subTest(case=n, quality=c["quality"]):
+                res = fuse([None if cand is None else _nan(cand) for cand in c["cands"]], referees[c["quality"]])
+                if c["result"] is None:
+                    self.assertIsNone(res)
+                    continue
+                kp, chosen = res
+                self.assertEqual(chosen, c["result"]["chosen"])
+                for a, b in zip(kp, _nan(c["result"]["keypoints"])):
+                    for u, v in zip(a, b):
+                        self.assertTrue((math.isnan(u) and math.isnan(v)) or abs(u - v) < 1e-9, (a, b))
+                body = fused_to_body25(kp, c["mp"])
+                self.assertLess(max(abs(u - v) for u, v in zip(body, c["body25"])), 1e-9)
 
 
 class Helpers(unittest.TestCase):

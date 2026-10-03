@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 // Assemble the static site in dist/ for GitHub Pages:
 //   * copies the app (HTML, CSS, JS, data, assets)
-//   * vendors the MediaPipe Tasks runtime from node_modules
-//   * downloads the pose models (cached in .cache/models) so the deployed
+//   * copies the pose engine's models (models/: MoveNet for TensorFlow.js and
+//     the referees; the ONNX copy is for the Python tool only)
+//   * vendors the MediaPipe Tasks runtime and TensorFlow.js from node_modules
+//   * downloads the MediaPipe models (cached in .cache/models) so the deployed
 //     site doesn't depend on third-party CDNs at runtime.
 // If a model can't be downloaded the app falls back to Google's model bucket.
 import { cpSync, mkdirSync, rmSync, existsSync, writeFileSync, copyFileSync, readdirSync, statSync } from 'node:fs';
@@ -11,7 +13,11 @@ import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const dist = join(root, 'dist');
-const models = ['lite', 'full', 'heavy'];
+const BUCKET = 'https://storage.googleapis.com/mediapipe-models';
+const models = [
+  ...['lite', 'full', 'heavy'].map((m) => [`pose_landmarker_${m}.task`, `${BUCKET}/pose_landmarker/pose_landmarker_${m}/float16/1/pose_landmarker_${m}.task`]),
+  ['efficientdet_lite0.tflite', `${BUCKET}/object_detector/efficientdet_lite0/float32/1/efficientdet_lite0.tflite`],
+];
 const skipModels = process.argv.includes('--no-models');
 
 rmSync(dist, { recursive: true, force: true });
@@ -19,6 +25,7 @@ mkdirSync(dist, { recursive: true });
 for (const item of ['index.html', 'builder.html', 'css', 'src', 'data', 'assets']) {
   cpSync(join(root, item), join(dist, item), { recursive: true });
 }
+cpSync(join(root, 'models'), join(dist, 'models'), { recursive: true, filter: (f) => !f.endsWith('.onnx') });
 writeFileSync(join(dist, '.nojekyll'), '');
 
 // MediaPipe runtime.
@@ -36,17 +43,33 @@ if (existsSync(mp)) {
   console.warn('node_modules/@mediapipe/tasks-vision missing (run npm ci); the site will load MediaPipe from the CDN');
 }
 
-// Pose models.
+// TensorFlow.js (runs MoveNet): the library plus its WebAssembly backend for
+// devices without a usable GPU.
+const tfjs = join(root, 'node_modules', '@tensorflow');
+const tfFiles = [
+  ['tfjs', 'tf.min.js'],
+  ['tfjs-backend-wasm', 'tf-backend-wasm.min.js'],
+  ['tfjs-backend-wasm', 'tfjs-backend-wasm.wasm'],
+  ['tfjs-backend-wasm', 'tfjs-backend-wasm-simd.wasm'],
+  ['tfjs-backend-wasm', 'tfjs-backend-wasm-threaded-simd.wasm'],
+];
+if (tfFiles.every(([pkg, f]) => existsSync(join(tfjs, pkg, 'dist', f)))) {
+  mkdirSync(join(dist, 'vendor', 'tfjs'), { recursive: true });
+  for (const [pkg, f] of tfFiles) copyFileSync(join(tfjs, pkg, 'dist', f), join(dist, 'vendor', 'tfjs', f));
+  console.log('vendored @tensorflow/tfjs');
+} else {
+  console.warn('node_modules/@tensorflow/tfjs* missing (run npm ci); the site will load TensorFlow.js from the CDN');
+}
+
+// MediaPipe models.
 if (!skipModels) {
   const cache = join(root, '.cache', 'models');
   mkdirSync(cache, { recursive: true });
   const out = join(dist, 'vendor', 'models');
   mkdirSync(out, { recursive: true });
-  for (const m of models) {
-    const file = `pose_landmarker_${m}.task`;
+  for (const [file, url] of models) {
     const cached = join(cache, file);
     if (!existsSync(cached) || statSync(cached).size < 1e6) {
-      const url = `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_${m}/float16/1/${file}`;
       try {
         const res = await fetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);

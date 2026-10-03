@@ -17,6 +17,8 @@
     "node": ">=20"
   },
   "devDependencies": {
-    "@mediapipe/tasks-vision": "1.0.1"
+    "@mediapipe/tasks-vision": "1.0.1",
+    "@tensorflow/tfjs": "4.22.0",
+    "@tensorflow/tfjs-backend-wasm": "4.22.0"
   }
 }

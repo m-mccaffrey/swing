@@ -13,7 +13,7 @@
 //     (orthographically) the mirror of one filmed from the chest, which the
 //     flip undoes. That is what lets any side view be compared to any other.
 
-import { KP, NUM_KP, LR_GROUPS, kx, ky, kc, emptyFrame, swapLR } from './body25.js';
+import { KP, NUM_KP, LR_GROUPS, PIN_CONF, kx, ky, kc, emptyFrame, pinned, swapLR } from './body25.js';
 import { clamp, fillGaps, gaussianSmooth, median, mean, derivative, robustSpline } from './math.js';
 
 const MIN_CONF = 0.25;
@@ -102,6 +102,7 @@ export function fixLeftRightFlicker(frames, refIndex = 0) {
     for (let i = from + step; step > 0 ? i <= to : i >= to; i += step) {
       let f = out[i];
       for (const pairs of Object.values(LR_GROUPS)) {
+        if (pairs.some(([a, b]) => pinned(f, a) || pinned(f, b))) continue; // the user said which is which
         const keep = groupCost(f, prev, pairs, false);
         const swap = groupCost(f, prev, pairs, true);
         if (Number.isFinite(keep) && Number.isFinite(swap) && swap < keep * 0.7) f = swapLR(f, pairs);
@@ -136,6 +137,7 @@ export function fixLeftRightFlicker(frames, refIndex = 0) {
  */
 export const SMOOTH_CUTOFF_HZ = 6; // swing-time Hz
 export const OUTLIER_TL = 0.2; // further off the path than this: ignored
+const PIN_WEIGHT = 25; // a point placed by hand: the path goes (almost) through it
 
 export function cleanSequence(frames, { fps = 30, maxGapSec = 0.2 } = {}) {
   const n = frames.length;
@@ -149,7 +151,8 @@ export function cleanSequence(frames, { fps = 30, maxGapSec = 0.2 } = {}) {
     const xs = frames.map((f) => f[j * 3]);
     const ys = frames.map((f) => f[j * 3 + 1]);
     const cs = frames.map((f) => f[j * 3 + 2]);
-    const ws = cs.map((c) => (c > MIN_CONF ? c : 0));
+    const ws = cs.map((c) => (c >= PIN_CONF ? PIN_WEIGHT : c > MIN_CONF ? c : 0));
+    const fixed = cs.map((c) => c >= PIN_CONF);
     // Fit each run of detections whose gaps are short enough to bridge.
     let i = 0;
     while (i < n) {
@@ -159,7 +162,7 @@ export function cleanSequence(frames, { fps = 30, maxGapSec = 0.2 } = {}) {
       }
       let last = i;
       for (let m = i + 1; m < n && m - last - 1 <= maxGap; m++) if (ws[m] > 0) last = m;
-      const fit = robustSpline([xs.slice(i, last + 1), ys.slice(i, last + 1)], ws.slice(i, last + 1), lambda, k);
+      const fit = robustSpline([xs.slice(i, last + 1), ys.slice(i, last + 1)], ws.slice(i, last + 1), lambda, k, 3, fixed.slice(i, last + 1));
       for (let m = i; m <= last; m++) {
         const q = m - i;
         out[m][j * 3] = fit.xs[0][q];
@@ -268,8 +271,9 @@ function handsTogether(frames, end, D, fps) {
     const f = out[i];
     const offX = Number.isFinite(fx[i]) ? fx[i] : 0;
     const offY = Number.isFinite(fy[i]) ? fy[i] : 0;
-    // Put wrist k next to the other one.
+    // Put wrist k next to the other one (never a wrist placed by hand).
     const place = (k) => {
+      if (pinned(f, W[k])) return;
       const a = W[1 - k];
       const sign = k === 1 ? 1 : -1;
       f[W[k] * 3] = f[a * 3] + sign * offX;
@@ -280,7 +284,10 @@ function handsTogether(frames, end, D, fps) {
     const g0 = belief(f, 0) > MIN_CONF;
     const g1 = belief(f, 1) > MIN_CONF;
     const together = has(f, W[0]) && has(f, W[1]) && dist(f, W[0], W[1]) <= D;
-    if (g0 && g1) {
+    if (pinned(f, W[0]) || pinned(f, W[1])) {
+      // A hand placed by hand is right, wherever the other one is.
+      if (!(g0 && g1)) place(g0 ? 1 : 0);
+    } else if (g0 && g1) {
       if (!together && (glitch[i] || !apart[i])) {
         const b0 = belief(f, 0);
         const b1 = belief(f, 1);

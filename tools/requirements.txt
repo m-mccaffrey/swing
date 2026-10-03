@@ -1,4 +1,5 @@
 # For tools/add_pro.py. Python 3.9+ (any version MediaPipe ships wheels for).
 # ffmpeg on your PATH is recommended: yt-dlp then downloads only the seconds you ask for.
 mediapipe>=0.10.14
+onnxruntime>=1.17
 yt-dlp

@@ -1,24 +1,35 @@
-// In-browser pose estimation with MediaPipe Pose Landmarker, converted to
-// OpenPose BODY_25 frames. The MediaPipe runtime and models are served from
-// ./vendor when the site was built with `npm run build` (GitHub Pages
-// workflow) and fall back to the public CDN / model bucket otherwise.
+// In-browser pose estimation, converted to OpenPose BODY_25 frames.
+//
+// "best" and "fast" run the pose engine (engine.js): person detector, crop
+// tracking, MoveNet + MediaPipe and the learned referee, the same pipeline the
+// Python tool uses for the pro database. "heavy"/"full"/"lite" are the older
+// MediaPipe-only path (whole frame, VIDEO mode).
+//
+// The MediaPipe runtime and models are served from ./vendor when the site was
+// built with `npm run build` (GitHub Pages workflow) and fall back to the
+// public CDN / model bucket otherwise.
 
 import { mediapipeToBody25, emptyFrame } from '../core/body25.js';
+import { createEngine } from './engine.js';
 
 export const MEDIAPIPE_VERSION = '1.0.1';
 const LOCAL_MP = new URL('../../vendor/mediapipe/', import.meta.url).href;
 const LOCAL_MODELS = new URL('../../vendor/models/', import.meta.url).href;
 const CDN_MP = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MEDIAPIPE_VERSION}/`;
-const MODEL_BUCKET = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/';
+const MODEL_BUCKET = 'https://storage.googleapis.com/mediapipe-models/';
+const DETECTOR_FILE = 'efficientdet_lite0.tflite';
 
 export const MODELS = {
-  lite: { label: 'Fast (lite)', file: 'pose_landmarker_lite.task' },
-  full: { label: 'Balanced (full)', file: 'pose_landmarker_full.task' },
-  heavy: { label: 'Most accurate (heavy, slow)', file: 'pose_landmarker_heavy.task' },
+  best: { label: 'Best (two models, cross-checked)', engine: true },
+  fast: { label: 'Fast (two models)', engine: true },
+  heavy: { label: 'MediaPipe only, heavy (older method)', file: 'pose_landmarker_heavy.task' },
+  full: { label: 'MediaPipe only, full (older method)', file: 'pose_landmarker_full.task' },
+  lite: { label: 'MediaPipe only, lite (older method)', file: 'pose_landmarker_lite.task' },
 };
 
-function remoteModelUrl(key) {
-  return `${MODEL_BUCKET}pose_landmarker_${key}/float16/1/${MODELS[key].file}`;
+function remoteModelUrl(file) {
+  if (file === DETECTOR_FILE) return `${MODEL_BUCKET}object_detector/efficientdet_lite0/float32/1/${file}`;
+  return `${MODEL_BUCKET}pose_landmarker/${file.replace('.task', '')}/float16/1/${file}`;
 }
 
 let visionPromise = null;
@@ -42,29 +53,37 @@ function loadVision() {
   return visionPromise;
 }
 
-async function modelPath(key) {
-  const local = `${LOCAL_MODELS}${MODELS[key].file}`;
+async function modelPath(file) {
+  const local = `${LOCAL_MODELS}${file}`;
   try {
     const res = await fetch(local, { method: 'HEAD' });
     if (res.ok) return local;
   } catch {
     /* fall through to remote */
   }
-  return remoteModelUrl(key);
+  return remoteModelUrl(file);
 }
 
 const landmarkers = new Map();
 
 /**
- * Create (or reuse) a PoseLandmarker in VIDEO mode. Tries the GPU delegate
- * first and falls back to CPU.
+ * Create (or reuse) a detector for `quality`: the pose engine for "best" and
+ * "fast", else a MediaPipe PoseLandmarker in VIDEO mode. GPU first, then CPU.
  */
-export async function getLandmarker(quality = 'full', onStatus = () => {}) {
+export async function getLandmarker(quality = 'best', onStatus = () => {}) {
+  if (!MODELS[quality]) quality = 'best';
   if (landmarkers.has(quality)) return landmarkers.get(quality);
-  onStatus('Loading pose model…');
+  onStatus('Loading pose models…');
   const { mod, wasm } = await loadVision();
   const vision = await mod.FilesetResolver.forVisionTasks(wasm);
-  const modelAssetPath = await modelPath(quality);
+  if (MODELS[quality].engine) {
+    const [poseModel, detectorModel] = await Promise.all([modelPath(MODELS.heavy.file), modelPath(DETECTOR_FILE)]);
+    const engine = await createEngine({ mod, vision, poseModel, detectorModel, quality, onStatus });
+    const wrapped = { engine };
+    landmarkers.set(quality, wrapped);
+    return wrapped;
+  }
+  const modelAssetPath = await modelPath(MODELS[quality].file);
   const make = (delegate) =>
     mod.PoseLandmarker.createFromOptions(vision, {
       baseOptions: { modelAssetPath, delegate },
@@ -154,7 +173,9 @@ export async function estimateVideoFps(video) {
 
 /**
  * Run pose detection over [start, end] of a video at `fps` samples/second.
- * @returns {Promise<{frames:number[][], times:number[], fps:number, width:number, height:number}>}
+ * With the pose engine, `candidates[i]` holds the models' answers at frame i
+ * (see PoseEngine.process), named by `candidateNames`.
+ * @returns {Promise<{frames:number[][], times:number[], fps:number, width:number, height:number, candidates?:Array, candidateNames?:string[]}>}
  */
 export async function analyzeVideo(video, detector, { fps = 30, start = 0, end = video.duration, onProgress, signal } = {}) {
   const width = video.videoWidth;
@@ -164,8 +185,11 @@ export async function analyzeVideo(video, detector, { fps = 30, start = 0, end =
   const frames = [];
   const times = [];
   video.pause();
+  const { engine } = detector;
+  const candidates = engine ? [] : null;
+  engine?.reset(); // a new clip: find the hitter again
   // MediaPipe needs strictly increasing timestamps per landmarker instance.
-  const base = detector.lastTs + 1000;
+  const base = (detector.lastTs || 0) + 1000;
   for (let k = 0; k < count; k++) {
     if (signal?.aborted) throw new DOMException('Analysis cancelled', 'AbortError');
     const t = Math.min(video.duration - 1e-3, start + k / fps);
@@ -173,18 +197,26 @@ export async function analyzeVideo(video, detector, { fps = 30, start = 0, end =
     const ts = base + Math.round((t - start) * 1000);
     let frame = emptyFrame();
     try {
-      const res = detector.landmarker.detectForVideo(video, ts);
-      const lm = res?.landmarks?.[0];
-      if (lm) frame = mediapipeToBody25(lm, width, height);
+      if (engine) {
+        engine.lastCandidates = null;
+        frame = await engine.process(video);
+      } else {
+        const res = detector.landmarker.detectForVideo(video, ts);
+        const lm = res?.landmarks?.[0];
+        if (lm) frame = mediapipeToBody25(lm, width, height);
+      }
     } catch (e) {
       console.warn('Pose detection failed on frame', k, e);
     }
     detector.lastTs = ts;
+    // Kept (to 0.01 px) so a joint fixed by hand can be re-picked from the other answers nearby.
+    candidates?.push(engine.lastCandidates?.map((c) => c && c.map((q) => q.map((v) => Math.round(v * 100) / 100))) ?? null);
     frames.push(frame);
     times.push(t);
     onProgress?.(k + 1, count, frame, t);
     // Yield so the page stays responsive.
     if (k % 4 === 3) await new Promise((r) => setTimeout(r, 0));
   }
+  if (engine) return { frames, times, fps, width, height, candidates, candidateNames: engine.referee.candidates };
   return { frames, times, fps, width, height };
 }

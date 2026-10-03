@@ -8,7 +8,8 @@ import { rankStances } from './core/match.js';
 import { evaluateFeedback, summarize, formatValue, formatDelta, TORSO_TO_HEIGHT } from './core/feedback.js';
 import { PHASES, phaseLabel, pickSwingFps } from './core/phases.js';
 import { demoUserSwing } from './core/synth.js';
-import { NUM_KP } from './core/body25.js';
+import { NUM_KP, kx, ky, pinned } from './core/body25.js';
+import { applyPins, nearestJoint, normalizePins } from './core/fix.js';
 import { getLandmarker, analyzeVideo, estimateVideoFps } from './pose/detector.js';
 import { Stage, FramePlayer } from './ui/stage.js';
 import { drawSkeleton, drawScene, canonicalBounds, fitCanvas, cssVar, drawHighlights, drawPoints } from './ui/draw.js';
@@ -23,7 +24,12 @@ const state = {
   videoUrl: null,
   videoFps: 30,
   isDemo: false,
-  analysis: null, // { frames, times, fps, width, height }
+  analysis: null, // { frames, times, fps, width, height, candidates?, candidateNames? }
+  pins: [], // joints fixed by hand: {frame, joint, x, y} in video pixels
+  fixedFrames: null, // analysis frames with the pins applied (cache)
+  fixing: false, // the stance stage is in "fix a joint" mode
+  fixFrame: 0, // frame shown while fixing (the stance pick stays put)
+  drag: null, // joint being dragged: {joint, x, y}
   swingFps: 30, // the swing's own clock (frames per swing-second)
   userBeats: null, // beats the user adjusted by hand (frame indices), or null for automatic
   beatKey: 'contact', // beat selected in the beat editor
@@ -60,6 +66,14 @@ function heightInches() {
   const ft = Number($('set-ft').value) || 5;
   const inch = Number($('set-in').value) || 0;
   return Math.max(36, Math.min(96, ft * 12 + inch));
+}
+
+/** The analysis frames with the joints fixed by hand: what everything downstream uses. */
+function userFrames() {
+  const a = state.analysis;
+  if (!state.pins.length) return a.frames;
+  if (!state.fixedFrames) state.fixedFrames = applyPins(a.frames, state.pins, { candidates: a.candidates, fps: a.fps });
+  return state.fixedFrames;
 }
 
 function torsoIn() {
@@ -269,17 +283,20 @@ function runDemo() {
 function afterAnalysis(saved = null) {
   const a = state.analysis;
   show('step-progress', false);
-  const coverage = detectionCoverage(a.frames);
+  state.pins = normalizePins(saved?.pins || []);
+  state.fixedFrames = null;
+  const frames = userFrames();
+  const coverage = detectionCoverage(frames);
   if (coverage < 0.2) {
     show('step-upload');
     showError('We could not find a person in most of the video. Make sure your whole body is visible, the lighting is good, and you are the only person in the frame.');
     return;
   }
   // The swing's own clock: slow motion and frame rate need no setting.
-  state.swingFps = estimateSwingFps(a.frames, a.fps);
-  state.suggestedStance = suggestStanceFrame(a.frames, state.swingFps);
+  state.swingFps = estimateSwingFps(frames, a.fps);
+  state.suggestedStance = suggestStanceFrame(frames, state.swingFps);
   state.stanceIndex = saved?.stanceIndex ?? state.suggestedStance;
-  state.sideDetect = detectPitcherSide(a.frames, state.stanceIndex, state.swingFps);
+  state.sideDetect = detectPitcherSide(frames, state.stanceIndex, state.swingFps);
   state.pitcherSide = saved?.pitcherSide ?? state.sideDetect.side;
   document.querySelector(`#pitcher-side input[value="${state.pitcherSide}"]`).checked = true;
   const conf = Math.round(state.sideDetect.confidence * 100);
@@ -290,22 +307,32 @@ function afterAnalysis(saved = null) {
     note.textContent = `Your body was only found in ${Math.round(coverage * 100)}% of frames. Results may be less reliable; a clearer, steadier video helps.`;
   } else note.hidden = true;
 
-  stages.stance?.destroy();
-  stages.stance = new Stage($('stance-stage'), { video: state.video, width: a.width, height: a.height, label: stageLabel() });
+  makeStanceStage();
   const slider = $('stance-slider');
   slider.max = String(a.frames.length - 1);
   slider.value = String(state.stanceIndex);
+  setFixing(false);
   show('step-stance');
   scrollTo('step-stance');
   showStanceFrame(state.stanceIndex);
 }
 
+function makeStanceStage() {
+  const a = state.analysis;
+  stages.stance?.destroy();
+  stages.stance = new Stage($('stance-stage'), { video: state.video, width: a.width, height: a.height, label: stageLabel() });
+  attachFixHandlers(stages.stance);
+}
+
 async function showStanceFrame(i) {
   const a = state.analysis;
   i = Math.max(0, Math.min(a.frames.length - 1, i));
-  state.stanceIndex = i;
+  if (state.fixing) state.fixFrame = i;
+  else state.stanceIndex = i;
   $('stance-slider').value = String(i);
-  $('stance-frame-label').textContent = `Frame ${i + 1} of ${a.frames.length} · ${fmtTime(a.times[i])}${i === state.suggestedStance ? ' · suggested stance' : ''}`;
+  $('stance-frame-label').textContent = state.fixing
+    ? `Fixing frame ${i + 1} of ${a.frames.length} · ${fmtTime(a.times[i])} · your stance is frame ${state.stanceIndex + 1}`
+    : `Frame ${i + 1} of ${a.frames.length} · ${fmtTime(a.times[i])}${i === state.suggestedStance ? ' · suggested stance' : ''}`;
   if (state.video) {
     await new Promise((resolve) => {
       const v = state.video;
@@ -319,13 +346,108 @@ async function showStanceFrame(i) {
       setTimeout(done, 1500);
     });
   }
-  if (state.stanceIndex !== i) return;
-  stages.stance.draw((ctx, map, u) => drawSkeleton(ctx, a.frames[i], { map, lineWidth: 3 * u, radius: 3 * u, outline: 'rgba(0,0,0,0.45)' }));
+  if ((state.fixing ? state.fixFrame : state.stanceIndex) !== i) return;
+  drawStanceStage(i);
   if (state.thumbPending && state.swingId && state.video) {
     state.thumbPending = false;
     const thumb = library.thumbnail(state.video);
     if (thumb) library.updateSwing(state.swingId, { thumb }).then(renderSavedList).catch(() => {});
   }
+}
+
+// ---------------------------------------------------------------- fixing joints by hand
+
+/** Enter or leave "fix a joint" mode on the stance stage (it starts at frame `at`). */
+function setFixing(on, at = state.stanceIndex) {
+  state.fixing = on;
+  state.drag = null;
+  if (on) state.fixFrame = at;
+  const overlay = stages.stance?.overlay;
+  if (overlay) {
+    overlay.style.pointerEvents = on ? 'auto' : '';
+    overlay.style.touchAction = on ? 'none' : '';
+    overlay.style.cursor = on ? 'crosshair' : '';
+  }
+  $('fix-toggle').textContent = on ? 'Done fixing' : 'Fix a joint';
+  $('fix-toggle').setAttribute('aria-pressed', String(on));
+  $('fix-hint').hidden = !on;
+  updateFixStatus();
+}
+
+function updateFixStatus() {
+  const n = state.pins.length;
+  $('fix-undo').hidden = !n;
+  $('fix-count').textContent = n ? `${n} joint${n > 1 ? 's' : ''} fixed by hand.` : '';
+}
+
+/** Replace the pins, then redo everything that depends on the frames. */
+function setPins(pins) {
+  const a = state.analysis;
+  state.pins = normalizePins(pins);
+  state.fixedFrames = null;
+  state.swingFps = estimateSwingFps(userFrames(), a.fps);
+  if (state.swingId) library.updateSwing(state.swingId, { pins: state.pins }).then(renderSavedList).catch(() => {});
+  updateFixStatus();
+  drawStanceStage(state.fixing ? state.fixFrame : state.stanceIndex);
+}
+
+function drawStanceStage(i) {
+  const f = userFrames()[i].slice();
+  const d = state.drag;
+  if (d) {
+    f[d.joint * 3] = d.x;
+    f[d.joint * 3 + 1] = d.y;
+  }
+  stages.stance.draw((ctx, map, u) => {
+    drawSkeleton(ctx, f, { map, lineWidth: 3 * u, radius: 3 * u, outline: 'rgba(0,0,0,0.45)', hollowBelow: state.fixing ? 0.3 : 0 });
+    drawPinMarks(ctx, map, f, u, d?.joint);
+  });
+}
+
+/** Joints fixed by hand (and the one being dragged): a white square. */
+function drawPinMarks(ctx, map, f, u, extra = -1) {
+  ctx.save();
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 2 * u;
+  for (let j = 0; j < NUM_KP; j++) {
+    if (!pinned(f, j) && j !== extra) continue;
+    const [x, y] = map(kx(f, j), ky(f, j));
+    ctx.strokeRect(x - 5 * u, y - 5 * u, 10 * u, 10 * u);
+  }
+  ctx.restore();
+}
+
+/** Dragging a joint on the stance stage, in fix mode. */
+function attachFixHandlers(stage) {
+  const toImage = (e) => {
+    const r = stage.overlay.getBoundingClientRect();
+    return [((e.clientX - r.left) / r.width) * stage.width, ((e.clientY - r.top) / r.height) * stage.height];
+  };
+  stage.overlay.addEventListener('pointerdown', (e) => {
+    if (!state.fixing) return;
+    const [x, y] = toImage(e);
+    const radius = (24 / stage.overlay.getBoundingClientRect().width) * stage.width;
+    const joint = nearestJoint(userFrames()[state.fixFrame], x, y, radius);
+    if (joint < 0) return;
+    e.preventDefault();
+    stage.overlay.setPointerCapture(e.pointerId);
+    state.drag = { joint, x, y };
+    drawStanceStage(state.fixFrame);
+  });
+  stage.overlay.addEventListener('pointermove', (e) => {
+    if (!state.drag) return;
+    [state.drag.x, state.drag.y] = toImage(e);
+    drawStanceStage(state.fixFrame);
+  });
+  const finish = (e) => {
+    const d = state.drag;
+    if (!d) return;
+    state.drag = null;
+    if (e.type === 'pointercancel') return drawStanceStage(state.fixFrame);
+    setPins([...state.pins, { frame: state.fixFrame, joint: d.joint, x: Math.round(d.x * 10) / 10, y: Math.round(d.y * 10) / 10 }]);
+  };
+  stage.overlay.addEventListener('pointerup', finish);
+  stage.overlay.addEventListener('pointercancel', finish);
 }
 
 // ---------------------------------------------------------------- compare
@@ -334,7 +456,7 @@ async function showStanceFrame(i) {
 function prepareUser() {
   const a = state.analysis;
   state.user = prepareSwing({
-    frames: a.frames,
+    frames: userFrames(),
     fps: a.fps,
     swingFps: state.userBeats ? pickSwingFps(state.swingFps, state.userBeats) : state.swingFps,
     stanceIndex: state.stanceIndex,
@@ -368,15 +490,14 @@ function compare() {
   scrollTo('results');
 }
 
-function reopenStance() {
+function reopenStance(fixAt = null) {
   player?.pause();
   show('results', false);
-  const a = state.analysis;
-  stages.stance?.destroy();
-  stages.stance = new Stage($('stance-stage'), { video: state.video, width: a.width, height: a.height, label: stageLabel() });
+  makeStanceStage();
   show('step-stance');
   scrollTo('step-stance');
-  showStanceFrame(state.stanceIndex);
+  setFixing(fixAt != null, fixAt);
+  showStanceFrame(fixAt ?? state.stanceIndex);
 }
 
 /** Pro frame j fitted to the user's proportions and standing on the user's ground. */
@@ -748,7 +869,9 @@ function drawResultFrame(i) {
   const showGhost = ghostOn && (i >= user.stanceIndex || evidenceHere);
   stages.result.draw((ctx, map, u) => {
     if (showGhost) drawSkeleton(ctx, toImg(proAt(j)), { map, color: proColor, lineWidth: 3 * u, radius: 0, alpha: 0.85, outline: 'rgba(0,0,0,0.35)' });
-    drawSkeleton(ctx, toImg(user.canon[i]), { map, lineWidth: 3 * u, radius: 3 * u, outline: 'rgba(0,0,0,0.45)', hollowBelow: 0.3 });
+    const mine = toImg(user.canon[i]);
+    drawSkeleton(ctx, mine, { map, lineWidth: 3 * u, radius: 3 * u, outline: 'rgba(0,0,0,0.45)', hollowBelow: 0.3 });
+    drawPinMarks(ctx, map, mine, u);
     if ($('raw-toggle').checked) drawPoints(ctx, a.frames[i], { map, radius: 2.5 * u });
     if (evidenceHere) {
       const o = { pair: ev.pair, scale: u };
@@ -922,14 +1045,14 @@ function exportPose() {
     id: `my-swing-${new Date().toISOString().slice(0, 10)}`,
     name: 'My swing',
     notes: 'Exported from Swing Match. Same format as the pro database (swing-db/v1).',
-    source: state.isDemo ? 'Swing Match demo swing (synthetic)' : 'Swing Match (MediaPipe Pose → BODY_25)',
+    source: state.isDemo ? 'Swing Match demo swing (synthetic)' : 'Swing Match pose tracking (BODY_25)',
     fps: a.fps,
     width: a.width,
     height: a.height,
     pitcherSide: state.pitcherSide,
     stanceFrame: state.user.stanceIndex,
     phases: state.comparison.phases,
-    frames: a.frames,
+    frames: userFrames().map((f) => f.map((v, k) => (k % 3 === 2 ? Math.min(1, v) : v))),
   });
   download('my-swing-body25.json', entry);
 }
@@ -1023,6 +1146,7 @@ async function renderSavedList() {
       rec.hasVideo ? 'video saved' : 'poses only',
       rec.stanceIndex != null ? 'stance picked' : '',
       rec.beats ? 'beats adjusted' : '',
+      rec.pins?.length ? `${rec.pins.length} joint${rec.pins.length > 1 ? 's' : ''} fixed` : '',
     ]
       .filter(Boolean)
       .join(' · ');
@@ -1094,7 +1218,7 @@ async function openSaved(id) {
     }
   }
   show('step-upload', false);
-  afterAnalysis({ stanceIndex: rec.stanceIndex, pitcherSide: rec.pitcherSide });
+  afterAnalysis({ stanceIndex: rec.stanceIndex, pitcherSide: rec.pitcherSide, pins: rec.pins });
   // Stance already picked last time: go straight to the results.
   if (rec.stanceIndex != null && !$('step-stance').hidden) {
     await dbReady;
@@ -1128,16 +1252,28 @@ function wire() {
 
   const slider = $('stance-slider');
   slider.addEventListener('input', () => showStanceFrame(Number(slider.value)));
-  $('stance-prev').addEventListener('click', () => showStanceFrame(state.stanceIndex - 1));
-  $('stance-next').addEventListener('click', () => showStanceFrame(state.stanceIndex + 1));
+  const shown = () => (state.fixing ? state.fixFrame : state.stanceIndex);
+  $('stance-prev').addEventListener('click', () => showStanceFrame(shown() - 1));
+  $('stance-next').addEventListener('click', () => showStanceFrame(shown() + 1));
   $('stance-suggest').addEventListener('click', () => showStanceFrame(state.suggestedStance));
   document.querySelectorAll('#pitcher-side input').forEach((r) =>
     r.addEventListener('change', () => {
       state.pitcherSide = r.value;
     }),
   );
-  $('compare-btn').addEventListener('click', compare);
-  $('restance-btn').addEventListener('click', reopenStance);
+  $('compare-btn').addEventListener('click', () => {
+    setFixing(false);
+    compare();
+  });
+  $('restance-btn').addEventListener('click', () => reopenStance());
+  $('fix-toggle').addEventListener('click', () => {
+    setFixing(!state.fixing, state.stanceIndex);
+    showStanceFrame(state.fixing ? state.fixFrame : state.stanceIndex);
+  });
+  $('fix-undo').addEventListener('click', () => {
+    setPins(state.pins.slice(0, -1));
+  });
+  $('fix-here').addEventListener('click', () => reopenStance(player?.index ?? state.stanceIndex));
 
   $('play-btn').addEventListener('click', () => {
     clearEvidence();
